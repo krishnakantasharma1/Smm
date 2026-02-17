@@ -44,7 +44,7 @@ export default function ContactPage() {
             Reach out to us on Telegram for quick support and order-related queries.
           </p>
           <span className="inline-block rounded-lg bg-secondary px-6 py-2.5 text-sm font-medium text-secondary-foreground">
-            Contact via Telegram
+            <a href="https://t.me/Htglinks" target="_blank" rel="noopener noreferrer" >Contact via Telegram</a>
           </span>
         </div>
       </div>
