@@ -46,6 +46,17 @@ export const platformsData: PlatformData[] = [
           
         ],
       },
+      {
+        name: "Organic Traffic",
+        services: [
+          {
+            name: "You Tube Video Clicks | %100 Organic Traffic URL Visitor 99 per 1000",
+            price: 99,
+          },
+          
+          
+        ],
+      },
 
 
 
@@ -286,6 +297,20 @@ export const platformsData: PlatformData[] = [
           { name: "Instagram Likes - [Speed: 10000/Hour][LQ] [Refill:- 365days] [Superfast - INSTANT]", price: 299 },
         ],
       },
+      {
+        name: "Organic Traffic",
+        services: [
+          {
+            name: "Instagram Story Link - Swipe Up/Go to Link-99 per 1000",
+            price: 99,
+          },
+          
+          
+        ],
+      },
+
+
+
       {
         name: "Instagram USA Services",
         services: [
