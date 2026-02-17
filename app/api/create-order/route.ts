@@ -2,11 +2,12 @@ import { NextResponse } from "next/server"
 
 export async function POST(request: Request) {
   try {
-    const { amount } = await request.json()
+    const body = await request.json()
+    const { amount } = body
 
-    if (!amount || amount < 20) {
+    if (!amount || typeof amount !== "number" || amount < 20) {
       return NextResponse.json(
-        { error: "Invalid amount. Minimum order is Rs.20" },
+        { error: `Invalid amount (Rs.${amount || 0}). Minimum order value is Rs.20.` },
         { status: 400 }
       )
     }
@@ -15,8 +16,9 @@ export async function POST(request: Request) {
     const keySecret = process.env.RAZORPAY_KEY_SECRET
 
     if (!keyId || !keySecret) {
+      console.error("Missing RAZORPAY_KEY_ID or RAZORPAY_KEY_SECRET environment variables")
       return NextResponse.json(
-        { error: "Payment gateway not configured" },
+        { error: "Payment gateway is not configured. Please contact support." },
         { status: 500 }
       )
     }
@@ -37,9 +39,10 @@ export async function POST(request: Request) {
     const order = await response.json()
 
     if (!response.ok) {
+      console.error("Razorpay order creation failed:", order)
       return NextResponse.json(
-        { error: order.error?.description || "Failed to create order" },
-        { status: 500 }
+        { error: order.error?.description || "Failed to create payment order. Please try again." },
+        { status: response.status }
       )
     }
 
@@ -48,10 +51,12 @@ export async function POST(request: Request) {
       keyId: keyId,
       amount: order.amount,
     })
-  } catch {
+  } catch (err) {
+    console.error("Create order error:", err)
     return NextResponse.json(
-      { error: "Internal server error" },
+      { error: "Server error while creating order. Please try again later." },
       { status: 500 }
     )
   }
 }
+

@@ -75,8 +75,39 @@ export function OrderForm() {
   }, [])
 
   const handlePlaceOrder = async () => {
-    if (!platform || !category || !service || !link || !quantity || !email || !contact) {
-      toast.error("Please fill in all fields")
+    // Validate individual fields with specific messages
+    if (!platform) {
+      toast.error("Please select a platform")
+      return
+    }
+    if (!category) {
+      toast.error("Please select a category")
+      return
+    }
+    if (!service) {
+      toast.error("Please select a service")
+      return
+    }
+    if (!link) {
+      toast.error("Please enter your account or post link")
+      return
+    }
+    if (!quantity || isNaN(Number(quantity)) || Number(quantity) <= 0) {
+      toast.error("Please enter a valid quantity")
+      return
+    }
+    if (!email) {
+      toast.error("Please enter your email address")
+      return
+    }
+    // Basic email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (!emailRegex.test(email)) {
+      toast.error("Please enter a valid email address")
+      return
+    }
+    if (!contact) {
+      toast.error("Please enter your Telegram username or phone number")
       return
     }
     if (!termsAccepted) {
@@ -84,17 +115,24 @@ export function OrderForm() {
       return
     }
     if (totalPrice < siteConfig.minOrderValue) {
-      toast.error(`Minimum order value is Rs.${siteConfig.minOrderValue}`)
+      toast.error(`Minimum order value is Rs.${siteConfig.minOrderValue}. Please increase your quantity.`)
       return
     }
     if (selectedService?.minOrder && Number(quantity) < selectedService.minOrder) {
-      toast.error(`Minimum order quantity is ${selectedService.minOrder}`)
+      toast.error(`Minimum order quantity for this service is ${selectedService.minOrder}`)
       return
     }
 
     setLoading(true)
 
     try {
+      // Check if Razorpay SDK is loaded
+      if (typeof window.Razorpay === "undefined") {
+        toast.error("Payment gateway is loading. Please wait a moment and try again.")
+        setLoading(false)
+        return
+      }
+
       const res = await fetch("/api/create-order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -103,8 +141,10 @@ export function OrderForm() {
 
       const data = await res.json()
 
-      if (!data.orderId) {
-        throw new Error("Failed to create order")
+      if (!res.ok || !data.orderId) {
+        toast.error(data.error || "Failed to create order. Please try again.")
+        setLoading(false)
+        return
       }
 
       const options = {
@@ -112,7 +152,7 @@ export function OrderForm() {
         amount: Math.round(totalPrice * 100),
         currency: "INR",
         name: siteConfig.name,
-        description: `${platform} - ${category} - ${service.substring(0, 50)}...`,
+        description: `${platform} - ${category} - ${service.substring(0, 50)}`,
         order_id: data.orderId,
         handler: async function (response: { razorpay_payment_id: string; razorpay_order_id: string; razorpay_signature: string }) {
           try {
@@ -139,8 +179,8 @@ export function OrderForm() {
             const verifyData = await verifyRes.json()
 
             if (verifyData.success) {
-              toast.success("Payment Done! We will get back to you soon.", {
-                duration: 6000,
+              toast.success("Order successfully placed \u2705 We will get back to you soon.", {
+                duration: 8000,
               })
               setPlatform("")
               setCategory("")
@@ -151,11 +191,18 @@ export function OrderForm() {
               setContact("")
               setTermsAccepted(false)
             } else {
-              toast.error("Payment verification failed. Please contact support.")
+              toast.error(verifyData.error || "Payment verification failed. Please contact support at htgstudio0@gmail.com")
             }
-          } catch {
-            toast.error("Something went wrong verifying payment. Please contact support.")
+          } catch (err) {
+            const message = err instanceof Error ? err.message : "Unknown error"
+            toast.error(`Payment verification error: ${message}. Please contact support at htgstudio0@gmail.com`)
           }
+        },
+        modal: {
+          ondismiss: function () {
+            toast.info("Payment was cancelled. You can try again anytime.")
+            setLoading(false)
+          },
         },
         prefill: {
           email: email,
@@ -167,9 +214,14 @@ export function OrderForm() {
       }
 
       const rzp = new window.Razorpay(options)
+      rzp.on("payment.failed", function (response: { error: { code: string; description: string; reason: string } }) {
+        toast.error(`Payment failed: ${response.error.description || response.error.reason || "Unknown error"}`)
+        setLoading(false)
+      })
       rzp.open()
-    } catch {
-      toast.error("Something went wrong. Please try again.")
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error"
+      toast.error(`Error: ${message}. Please try again or contact support.`)
     } finally {
       setLoading(false)
     }
@@ -369,3 +421,4 @@ export function OrderForm() {
     </div>
   )
 }
+
