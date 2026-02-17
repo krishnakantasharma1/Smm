@@ -155,13 +155,13 @@ export function HeroSection() {
             Trusted Growth Platform
           </div>
 
-          <h1 className="font-display text-balance text-3xl font-extrabold tracking-tight text-foreground md:text-5xl lg:text-6xl">
+          <h2 className="font-display text-balance text-3xl font-extrabold tracking-tight text-foreground md:text-5xl lg:text-6xl">
             Loved by millions{" "}
             <span className="bg-gradient-to-r from-primary to-[hsl(142,72%,50%)] bg-clip-text text-transparent">
               all over the world
             </span>
             {" "}❤️
-          </h1>
+          </h2>
 
           <p className="mx-auto mt-4 max-w-2xl text-pretty text-base text-muted-foreground md:text-lg">
             Grow your social media presence with our fast, reliable, and affordable services.
