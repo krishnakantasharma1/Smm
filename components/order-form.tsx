@@ -621,7 +621,7 @@ export function OrderForm() {
 
         {/* Email */}
         <div className="flex flex-col gap-2">
-          <Label className="text-sm font-medium text-foreground">Email Address</Label>
+          <Label className="text-sm font-medium text-foreground">Email Address(Will be used to contact you)</Label>
           <Input
             type="email"
             value={email}
