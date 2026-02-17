@@ -33,6 +33,25 @@ export const platformsData: PlatformData[] = [
         ],
       },
       {
+        name: "Youtube Watchtime",
+        services: [
+          {
+            name: "You Tube Watchtime Speed 250-500/Day Refill: 30 Days (Video Length: 30 Minute) (Start: 4-8 Hour)-1999 per 1000",
+            price: 1999,
+          },
+          {
+            name: "YouTube Watchtime - Speed: 100-200/Day-Refill: 30 Days (Video Length: 60-Minute) (Start: 4-8 Hour)-2699 per 100",
+            price: 2699,
+          },
+          
+        ],
+      },
+
+
+
+
+
+      {
         name: "Youtube Shorts",
         services: [
           {
