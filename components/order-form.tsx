@@ -677,7 +677,7 @@ export function OrderForm() {
             <a href="/refund-policy" target="_blank" className="font-medium text-primary underline">
               Refund Policy
             </a>
-            , and understand that services are non-refundable once delivered.
+            
           </Label>
         </div>
 
