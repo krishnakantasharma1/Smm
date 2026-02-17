@@ -75,6 +75,14 @@ export async function POST(request: Request) {
       console.error("[verify-payment] Email failed:", emailErr)
     }
 
+    // Send confirmation email to the customer via Brevo HTTP API
+    // Wrapped in its own try/catch so it never affects the admin email or success response
+    try {
+      await sendCustomerConfirmationEmail(orderDetails as OrderDetails, razorpay_payment_id, razorpay_order_id)
+    } catch (customerEmailErr) {
+      console.error("[verify-payment] Customer confirmation email failed:", customerEmailErr)
+    }
+
     return NextResponse.json({ success: true })
   } catch (err) {
     console.error("[verify-payment] Unhandled error:", err)
@@ -230,3 +238,161 @@ Contact    : ${orderDetails.contact}
 
   console.warn("[sendOrderEmail] ⚠️ No email service available. Order logged to console only.")
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Customer Confirmation Email via Brevo HTTP API (port 443, never blocked)
+// ─────────────────────────────────────────────────────────────────────
+async function sendCustomerConfirmationEmail(
+  orderDetails: OrderDetails,
+  paymentId: string,
+  orderId: string
+): Promise<void> {
+  const brevoApiKey = process.env.BREVO_API_KEY
+  if (!brevoApiKey) {
+    console.warn("[sendCustomerEmail] BREVO_API_KEY not set — skipping customer email")
+    return
+  }
+
+  if (!orderDetails.email) {
+    console.warn("[sendCustomerEmail] No customer email address — skipping")
+    return
+  }
+
+  const dateStr = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })
+
+  const subject = `Order Confirmed — SSM Reselling | ${orderDetails.platform} - ${orderDetails.category}`
+
+  const htmlContent = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 0; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden;">
+      <!-- Header -->
+      <div style="background: #0066FF; padding: 24px 20px; text-align: center;">
+        <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: 700;">SSM Reselling</h1>
+        <p style="color: #cce0ff; margin: 6px 0 0; font-size: 13px;">Social Media Growth Services</p>
+      </div>
+
+      <!-- Body -->
+      <div style="padding: 24px 20px;">
+        <div style="background: #e6f4ea; border: 1px solid #b7dfbf; border-radius: 6px; padding: 14px 16px; margin-bottom: 20px; text-align: center;">
+          <h2 style="color: #1a7f37; margin: 0; font-size: 18px;">Order Confirmed</h2>
+          <p style="color: #2d6a3f; margin: 6px 0 0; font-size: 14px;">Your payment was successful and your order has been placed.</p>
+        </div>
+
+        <p style="color: #333; font-size: 14px; line-height: 1.6; margin: 0 0 18px;">
+          Hi there,<br/>
+          Thank you for your order! We have received your payment and your order is now being processed. We will get back to you soon with an update.
+        </p>
+
+        <!-- Order Summary -->
+        <h3 style="color: #333; font-size: 15px; margin: 0 0 10px; border-bottom: 2px solid #0066FF; padding-bottom: 6px;">Order Summary</h3>
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+          <tr style="background: #f8f9fa;">
+            <td style="padding: 10px 12px; font-weight: bold; border: 1px solid #dee2e6; width: 40%; font-size: 13px; color: #555;">Platform</td>
+            <td style="padding: 10px 12px; border: 1px solid #dee2e6; font-size: 13px; color: #333;">${orderDetails.platform}</td>
+          </tr>
+          <tr>
+            <td style="padding: 10px 12px; font-weight: bold; border: 1px solid #dee2e6; font-size: 13px; color: #555;">Category</td>
+            <td style="padding: 10px 12px; border: 1px solid #dee2e6; font-size: 13px; color: #333;">${orderDetails.category}</td>
+          </tr>
+          <tr style="background: #f8f9fa;">
+            <td style="padding: 10px 12px; font-weight: bold; border: 1px solid #dee2e6; font-size: 13px; color: #555;">Service</td>
+            <td style="padding: 10px 12px; border: 1px solid #dee2e6; font-size: 13px; color: #333;">${orderDetails.service}</td>
+          </tr>
+          <tr>
+            <td style="padding: 10px 12px; font-weight: bold; border: 1px solid #dee2e6; font-size: 13px; color: #555;">Quantity</td>
+            <td style="padding: 10px 12px; border: 1px solid #dee2e6; font-size: 13px; color: #333;">${orderDetails.quantity}</td>
+          </tr>
+          <tr style="background: #e8f0fe;">
+            <td style="padding: 10px 12px; font-weight: bold; border: 1px solid #dee2e6; font-size: 13px; color: #0066FF;">Total Paid</td>
+            <td style="padding: 10px 12px; border: 1px solid #dee2e6; font-weight: bold; color: #0066FF; font-size: 15px;">Rs.${orderDetails.totalPrice}</td>
+          </tr>
+        </table>
+
+        <!-- Reference IDs -->
+        <h3 style="color: #333; font-size: 15px; margin: 0 0 10px; border-bottom: 2px solid #0066FF; padding-bottom: 6px;">Payment Reference</h3>
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+          <tr style="background: #f8f9fa;">
+            <td style="padding: 10px 12px; font-weight: bold; border: 1px solid #dee2e6; width: 40%; font-size: 13px; color: #555;">Payment ID</td>
+            <td style="padding: 10px 12px; border: 1px solid #dee2e6; font-size: 13px; color: #333; font-family: monospace;">${paymentId}</td>
+          </tr>
+          <tr>
+            <td style="padding: 10px 12px; font-weight: bold; border: 1px solid #dee2e6; font-size: 13px; color: #555;">Order ID</td>
+            <td style="padding: 10px 12px; border: 1px solid #dee2e6; font-size: 13px; color: #333; font-family: monospace;">${orderId}</td>
+          </tr>
+          <tr style="background: #f8f9fa;">
+            <td style="padding: 10px 12px; font-weight: bold; border: 1px solid #dee2e6; font-size: 13px; color: #555;">Date</td>
+            <td style="padding: 10px 12px; border: 1px solid #dee2e6; font-size: 13px; color: #333;">${dateStr}</td>
+          </tr>
+        </table>
+
+        <!-- Support Note -->
+        <div style="background: #f8f9fa; border-radius: 6px; padding: 14px 16px; margin-bottom: 10px;">
+          <p style="color: #555; font-size: 13px; line-height: 1.6; margin: 0;">
+            If you have any questions about your order, feel free to reach out to us at
+            <a href="mailto:htgstudio0@gmail.com" style="color: #0066FF; text-decoration: none;">htgstudio0@gmail.com</a>.
+            Please include your Payment ID for faster assistance.
+          </p>
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <div style="background: #f1f3f5; padding: 16px 20px; text-align: center; border-top: 1px solid #e0e0e0;">
+        <p style="color: #888; font-size: 12px; margin: 0;">SSM Reselling — Social Media Growth Services</p>
+        <p style="color: #aaa; font-size: 11px; margin: 4px 0 0;">This is an automated confirmation. Please do not reply to this email.</p>
+      </div>
+    </div>
+  `
+
+  const textContent = `
+ORDER CONFIRMED — SSM Reselling
+================================
+
+Hi there,
+Thank you for your order! We have received your payment and your order is now being processed. We will get back to you soon with an update.
+
+ORDER SUMMARY
+-------------
+Platform   : ${orderDetails.platform}
+Category   : ${orderDetails.category}
+Service    : ${orderDetails.service}
+Quantity   : ${orderDetails.quantity}
+Total Paid : Rs.${orderDetails.totalPrice}
+
+PAYMENT REFERENCE
+-----------------
+Payment ID : ${paymentId}
+Order ID   : ${orderId}
+Date       : ${dateStr}
+
+If you have any questions, contact us at htgstudio0@gmail.com with your Payment ID.
+
+SSM Reselling — Social Media Growth Services
+  `.trim()
+
+  console.log("[sendCustomerEmail] Sending confirmation to:", orderDetails.email)
+
+  const res = await fetch("https://api.brevo.com/v3/smtp/email", {
+    method: "POST",
+    headers: {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "api-key": brevoApiKey,
+    },
+    body: JSON.stringify({
+      sender: { name: "SSM Reselling", email: "krishnakantasharma297@gmail.com" },
+      to: [{ email: orderDetails.email }],
+      subject,
+      htmlContent,
+      textContent,
+    }),
+  })
+
+  const data = await res.json()
+
+  if (res.ok) {
+    console.log("[sendCustomerEmail] Sent via Brevo to", orderDetails.email, "messageId:", data.messageId)
+  } else {
+    console.error("[sendCustomerEmail] Brevo API error:", res.status, JSON.stringify(data))
+    throw new Error(`Brevo API returned ${res.status}: ${JSON.stringify(data)}`)
+  }
+}
+
