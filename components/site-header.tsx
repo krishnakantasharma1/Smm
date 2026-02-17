@@ -1,13 +1,23 @@
 "use client"
 
 import Link from "next/link"
-import { useState } from "react"
-import { Menu, X, Zap } from "lucide-react"
+import { useState, useEffect } from "react"
+import { Menu, X, Zap, Package } from "lucide-react"
 import { siteConfig } from "@/lib/site-config"
 import { Button } from "@/components/ui/button"
 
 export function SiteHeader() {
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [hasOrders, setHasOrders] = useState(false)
+
+  useEffect(() => {
+    try {
+      const orders = JSON.parse(localStorage.getItem("htg_orders") || "[]")
+      setHasOrders(orders.length > 0)
+    } catch {
+      setHasOrders(false)
+    }
+  }, [])
 
   const navLinks = [
     { href: "/", label: "New Order" },
@@ -35,6 +45,16 @@ export function SiteHeader() {
               {link.label}
             </Link>
           ))}
+          {hasOrders && (
+            <Link
+              href="/my-orders"
+              className="relative flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
+            >
+              <Package className="h-4 w-4" />
+              My Orders
+              <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-primary" />
+            </Link>
+          )}
         </nav>
 
         <Button
@@ -61,6 +81,16 @@ export function SiteHeader() {
                 {link.label}
               </Link>
             ))}
+            {hasOrders && (
+              <Link
+                href="/my-orders"
+                onClick={() => setMobileOpen(false)}
+                className="flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
+              >
+                <Package className="h-4 w-4" />
+                My Orders
+              </Link>
+            )}
           </nav>
         </div>
       )}
