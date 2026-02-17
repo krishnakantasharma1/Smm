@@ -192,6 +192,28 @@ export function OrderForm() {
               toast.success("✅ Payment successful! We will get back to you soon.", {
                 duration: 8000,
               })
+              // Save order to localStorage for My Orders page
+              try {
+                const existingOrders = JSON.parse(localStorage.getItem("htg_orders") || "[]")
+                const newOrder = {
+                  id: response.razorpay_order_id,
+                  paymentId: response.razorpay_payment_id,
+                  platform,
+                  category,
+                  service,
+                  link,
+                  quantity,
+                  email,
+                  contact,
+                  totalPrice,
+                  status: "Processing",
+                  placedAt: new Date().toISOString(),
+                }
+                existingOrders.unshift(newOrder)
+                localStorage.setItem("htg_orders", JSON.stringify(existingOrders))
+              } catch (e) {
+                console.error("Failed to save order locally:", e)
+              }
               // Reset entire form
               setPlatform("")
               setCategory("")
@@ -300,13 +322,13 @@ export function OrderForm() {
               <SelectTrigger className="bg-background">
                 <SelectValue placeholder="Select Service" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="w-[var(--radix-select-trigger-width)] max-w-[calc(100vw-2rem)]">
                 {selectedCategory.services.map((s, idx) => (
-                  <SelectItem key={idx} value={s.name}>
-                    <span className="block max-w-[500px] truncate">{s.name}</span>
-                    <span className="ml-2 font-semibold text-primary">
-                      Rs.{s.price}/1000
-                    </span>
+                  <SelectItem key={idx} value={s.name} className="items-start">
+                    <div className="flex flex-col gap-0.5 py-0.5">
+                      <span className="whitespace-normal break-words leading-snug">{s.name}</span>
+                      <span className="font-semibold text-primary text-xs">Rs.{s.price}/1000</span>
+                    </div>
                   </SelectItem>
                 ))}
               </SelectContent>
