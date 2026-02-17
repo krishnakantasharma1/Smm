@@ -1,459 +1,232 @@
-"use client"
+import { NextResponse } from "next/server"
+import crypto from "crypto"
+import nodemailer from "nodemailer"
 
-import { useState, useMemo, useCallback } from "react"
-import { platformsData } from "@/lib/services-data"
-import { siteConfig } from "@/lib/site-config"
-import { Button } from "@/components/ui/button"
-import { Label } from "@/components/ui/label"
-import { Input } from "@/components/ui/input"
-import { Checkbox } from "@/components/ui/checkbox"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import { toast } from "sonner"
-import { ChevronRight, ShoppingCart, IndianRupee } from "lucide-react"
+const RECIPIENT_EMAIL = "htgstudio0@gmail.com"
 
-declare global {
-  interface Window {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    Razorpay: any
+interface OrderDetails {
+  platform: string
+  category: string
+  service: string
+  link: string
+  quantity: string
+  totalPrice: number
+  email: string
+  contact: string
+}
+
+export async function POST(request: Request) {
+  try {
+    const body = await request.json()
+    const {
+      razorpay_payment_id,
+      razorpay_order_id,
+      razorpay_signature,
+      orderDetails,
+    } = body
+
+    if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
+      return NextResponse.json(
+        { success: false, error: "Missing payment details. Please contact support." },
+        { status: 400 }
+      )
+    }
+
+    if (!orderDetails) {
+      return NextResponse.json(
+        { success: false, error: "Missing order details. Please contact support." },
+        { status: 400 }
+      )
+    }
+
+    const keySecret = process.env.RAZORPAY_KEY_SECRET
+    if (!keySecret) {
+      console.error("[verify-payment] Missing RAZORPAY_KEY_SECRET")
+      return NextResponse.json(
+        { success: false, error: "Payment gateway is not configured. Please contact support." },
+        { status: 500 }
+      )
+    }
+
+    // Verify Razorpay signature
+    const signatureBody = `${razorpay_order_id}|${razorpay_payment_id}`
+    const expectedSignature = crypto
+      .createHmac("sha256", keySecret)
+      .update(signatureBody)
+      .digest("hex")
+
+    if (expectedSignature !== razorpay_signature) {
+      console.error("[verify-payment] Signature mismatch for order:", razorpay_order_id)
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Payment signature verification failed. If money was deducted, contact support with payment ID: ${razorpay_payment_id}`,
+        },
+        { status: 400 }
+      )
+    }
+
+    // IMPORTANT: await the email — do NOT fire-and-forget on Vercel
+    // Vercel kills background tasks the moment the response is sent
+    try {
+      await sendOrderEmail(orderDetails as OrderDetails, razorpay_payment_id, razorpay_order_id)
+    } catch (emailErr) {
+      // Log but don't block the success response
+      console.error("[verify-payment] Email failed:", emailErr)
+    }
+
+    return NextResponse.json({ success: true })
+  } catch (err) {
+    console.error("[verify-payment] Unhandled error:", err)
+    return NextResponse.json(
+      { success: false, error: "Server error during payment verification. Please contact support." },
+      { status: 500 }
+    )
   }
 }
 
-export function OrderForm() {
-  const [platform, setPlatform] = useState("")
-  const [category, setCategory] = useState("")
-  const [service, setService] = useState("")
-  const [link, setLink] = useState("")
-  const [quantity, setQuantity] = useState("")
-  const [email, setEmail] = useState("")
-  const [contact, setContact] = useState("")
-  const [termsAccepted, setTermsAccepted] = useState(false)
-  const [loading, setLoading] = useState(false)
+async function sendOrderEmail(
+  orderDetails: OrderDetails,
+  paymentId: string,
+  orderId: string
+): Promise<void> {
+  const dateStr = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })
 
-  const selectedPlatform = useMemo(
-    () => platformsData.find((p) => p.name === platform),
-    [platform]
-  )
+  const subject = `New Order ✅ ${orderDetails.platform} | ${orderDetails.category} | Rs.${orderDetails.totalPrice}`
 
-  const selectedCategory = useMemo(
-    () => selectedPlatform?.categories.find((c) => c.name === category),
-    [selectedPlatform, category]
-  )
+  const htmlContent = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
+      <div style="background: #0066FF; padding: 16px 20px; border-radius: 6px 6px 0 0; margin: -20px -20px 20px;">
+        <h2 style="color: #ffffff; margin: 0; font-size: 20px;">🛒 New Order Received!</h2>
+      </div>
+      <h3 style="color: #333; margin-top: 0;">Order Details</h3>
+      <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+        <tr style="background: #f8f9fa;">
+          <td style="padding: 10px 12px; font-weight: bold; border: 1px solid #dee2e6; width: 40%;">Payment ID</td>
+          <td style="padding: 10px 12px; border: 1px solid #dee2e6; font-family: monospace;">${paymentId}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; font-weight: bold; border: 1px solid #dee2e6;">Order ID</td>
+          <td style="padding: 10px 12px; border: 1px solid #dee2e6; font-family: monospace;">${orderId}</td>
+        </tr>
+        <tr style="background: #f8f9fa;">
+          <td style="padding: 10px 12px; font-weight: bold; border: 1px solid #dee2e6;">Platform</td>
+          <td style="padding: 10px 12px; border: 1px solid #dee2e6;">${orderDetails.platform}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; font-weight: bold; border: 1px solid #dee2e6;">Category</td>
+          <td style="padding: 10px 12px; border: 1px solid #dee2e6;">${orderDetails.category}</td>
+        </tr>
+        <tr style="background: #f8f9fa;">
+          <td style="padding: 10px 12px; font-weight: bold; border: 1px solid #dee2e6;">Service</td>
+          <td style="padding: 10px 12px; border: 1px solid #dee2e6;">${orderDetails.service}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; font-weight: bold; border: 1px solid #dee2e6;">Link</td>
+          <td style="padding: 10px 12px; border: 1px solid #dee2e6;"><a href="${orderDetails.link}" style="color: #0066FF;">${orderDetails.link}</a></td>
+        </tr>
+        <tr style="background: #f8f9fa;">
+          <td style="padding: 10px 12px; font-weight: bold; border: 1px solid #dee2e6;">Quantity</td>
+          <td style="padding: 10px 12px; border: 1px solid #dee2e6;">${orderDetails.quantity}</td>
+        </tr>
+        <tr style="background: #e8f0fe;">
+          <td style="padding: 10px 12px; font-weight: bold; border: 1px solid #dee2e6; color: #0066FF;">Total Paid</td>
+          <td style="padding: 10px 12px; border: 1px solid #dee2e6; font-weight: bold; color: #0066FF; font-size: 16px;">Rs.${orderDetails.totalPrice}</td>
+        </tr>
+      </table>
+      <h3 style="color: #333;">Customer Details</h3>
+      <table style="width: 100%; border-collapse: collapse;">
+        <tr style="background: #f8f9fa;">
+          <td style="padding: 10px 12px; font-weight: bold; border: 1px solid #dee2e6; width: 40%;">Email</td>
+          <td style="padding: 10px 12px; border: 1px solid #dee2e6;"><a href="mailto:${orderDetails.email}" style="color: #0066FF;">${orderDetails.email}</a></td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; font-weight: bold; border: 1px solid #dee2e6;">Contact</td>
+          <td style="padding: 10px 12px; border: 1px solid #dee2e6;">${orderDetails.contact}</td>
+        </tr>
+      </table>
+      <p style="color: #888; margin-top: 20px; font-size: 12px; border-top: 1px solid #eee; padding-top: 12px;">
+        Order received on: ${dateStr}<br/>HTG Studio — Social Media Growth Services
+      </p>
+    </div>
+  `
 
-  const selectedService = useMemo(
-    () => selectedCategory?.services.find((s) => s.name === service),
-    [selectedCategory, service]
-  )
+  const textContent = `
+NEW ORDER RECEIVED — HTG Studio
+================================
+Payment ID : ${paymentId}
+Order ID   : ${orderId}
+Date       : ${dateStr}
 
-  const totalPrice = useMemo(() => {
-    if (!selectedService || !quantity || isNaN(Number(quantity))) return 0
-    const qty = Number(quantity)
-    return Math.ceil((selectedService.price / 1000) * qty * 100) / 100
-  }, [selectedService, quantity])
+SERVICE INFO
+------------
+Platform   : ${orderDetails.platform}
+Category   : ${orderDetails.category}
+Service    : ${orderDetails.service}
+Link       : ${orderDetails.link}
+Quantity   : ${orderDetails.quantity}
+Total Paid : Rs.${orderDetails.totalPrice}
 
-  const handlePlatformChange = useCallback((val: string) => {
-    setPlatform(val)
-    setCategory("")
-    setService("")
-    setQuantity("")
-  }, [])
+CUSTOMER
+--------
+Email      : ${orderDetails.email}
+Contact    : ${orderDetails.contact}
+  `.trim()
 
-  const handleCategoryChange = useCallback((val: string) => {
-    setCategory(val)
-    setService("")
-    setQuantity("")
-  }, [])
+  console.log("[sendOrderEmail] Attempting to send email for payment:", paymentId)
 
-  const handleServiceChange = useCallback((val: string) => {
-    setService(val)
-    setQuantity("")
-  }, [])
+  // ── OPTION 1: Resend API (works on Vercel) ──
+  const resendKey = process.env.RESEND_API_KEY
+  console.log("[sendOrderEmail] RESEND_API_KEY present:", !!resendKey)
 
-  const handlePlaceOrder = async () => {
-    // Validate individual fields with specific messages
-    if (!platform) {
-      toast.error("Please select a platform")
+  if (resendKey) {
+    const resendRes = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${resendKey}`,
+      },
+      body: JSON.stringify({
+        from: "onboarding@resend.dev",
+        to: RECIPIENT_EMAIL,
+        subject,
+        html: htmlContent,
+        text: textContent,
+      }),
+    })
+
+    const resendData = await resendRes.json()
+    console.log("[sendOrderEmail] Resend response:", resendRes.status, JSON.stringify(resendData))
+
+    if (resendRes.ok) {
+      console.log("[sendOrderEmail] ✅ Sent via Resend to", RECIPIENT_EMAIL)
       return
-    }
-    if (!category) {
-      toast.error("Please select a category")
-      return
-    }
-    if (!service) {
-      toast.error("Please select a service")
-      return
-    }
-    if (!link) {
-      toast.error("Please enter your account or post link")
-      return
-    }
-    if (!quantity || isNaN(Number(quantity)) || Number(quantity) <= 0) {
-      toast.error("Please enter a valid quantity")
-      return
-    }
-    if (!email) {
-      toast.error("Please enter your email address")
-      return
-    }
-    // Basic email validation
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-    if (!emailRegex.test(email)) {
-      toast.error("Please enter a valid email address")
-      return
-    }
-    if (!contact) {
-      toast.error("Please enter your Telegram username or phone number")
-      return
-    }
-    if (!termsAccepted) {
-      toast.error("Please accept the terms and conditions")
-      return
-    }
-    if (totalPrice < siteConfig.minOrderValue) {
-      toast.error(`Minimum order value is Rs.${siteConfig.minOrderValue}. Please increase your quantity.`)
-      return
-    }
-    if (selectedService?.minOrder && Number(quantity) < selectedService.minOrder) {
-      toast.error(`Minimum order quantity for this service is ${selectedService.minOrder}`)
-      return
-    }
-
-    setLoading(true)
-
-    try {
-      // Wait for Razorpay SDK to load (retry up to 5 seconds)
-      if (typeof window.Razorpay === "undefined") {
-        let waited = 0
-        await new Promise<void>((resolve, reject) => {
-          const interval = setInterval(() => {
-            waited += 200
-            if (typeof window.Razorpay !== "undefined") {
-              clearInterval(interval)
-              resolve()
-            } else if (waited >= 5000) {
-              clearInterval(interval)
-              reject(new Error("Payment gateway failed to load. Please refresh the page and try again."))
-            }
-          }, 200)
-        })
-      }
-
-      const res = await fetch("/api/create-order", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ amount: totalPrice }),
-      })
-
-      const data = await res.json()
-
-      if (!res.ok || !data.orderId) {
-        toast.error(data.error || "Failed to create order. Please try again.")
-        setLoading(false)
-        return
-      }
-
-      const options = {
-        key: data.keyId,
-        amount: Math.round(totalPrice * 100),
-        currency: "INR",
-        name: siteConfig.name,
-        description: `${platform} - ${category} - ${service.substring(0, 50)}`,
-        order_id: data.orderId,
-        handler: async function (response: { razorpay_payment_id: string; razorpay_order_id: string; razorpay_signature: string }) {
-          try {
-            const verifyRes = await fetch("/api/verify-payment", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                razorpay_payment_id: response.razorpay_payment_id,
-                razorpay_order_id: response.razorpay_order_id,
-                razorpay_signature: response.razorpay_signature,
-                orderDetails: {
-                  platform,
-                  category,
-                  service,
-                  link,
-                  quantity,
-                  email,
-                  contact,
-                  totalPrice,
-                },
-              }),
-            })
-
-            const verifyData = await verifyRes.json()
-
-            if (verifyData.success) {
-              toast.success("✅ Payment successful! We will get back to you soon.", {
-                duration: 8000,
-              })
-              // Save order to localStorage for My Orders page
-              try {
-                const existingOrders = JSON.parse(localStorage.getItem("htg_orders") || "[]")
-                const newOrder = {
-                  id: response.razorpay_order_id,
-                  paymentId: response.razorpay_payment_id,
-                  platform,
-                  category,
-                  service,
-                  link,
-                  quantity,
-                  email,
-                  contact,
-                  totalPrice,
-                  status: "Processing",
-                  placedAt: new Date().toISOString(),
-                }
-                existingOrders.unshift(newOrder)
-                localStorage.setItem("htg_orders", JSON.stringify(existingOrders))
-              } catch (e) {
-                console.error("Failed to save order locally:", e)
-              }
-              // Reset entire form
-              setPlatform("")
-              setCategory("")
-              setService("")
-              setLink("")
-              setQuantity("")
-              setEmail("")
-              setContact("")
-              setTermsAccepted(false)
-              setLoading(false)
-            } else {
-              toast.error(verifyData.error || "Payment verification failed. Please contact support at htgstudio0@gmail.com")
-              setLoading(false)
-            }
-          } catch (err) {
-            const message = err instanceof Error ? err.message : "Unknown error"
-            toast.error(`Payment verification error: ${message}. Please contact support at htgstudio0@gmail.com`)
-            setLoading(false)
-          }
-        },
-        modal: {
-          ondismiss: function () {
-            toast.info("Payment was cancelled. You can try again anytime.")
-            setLoading(false)
-          },
-        },
-        prefill: {
-          email: email,
-          contact: contact,
-        },
-        theme: {
-          color: "#0066FF",
-        },
-      }
-
-      const rzp = new window.Razorpay(options)
-      rzp.on("payment.failed", function (response: { error: { code: string; description: string; reason: string } }) {
-        toast.error(`Payment failed: ${response.error.description || response.error.reason || "Unknown error"}`)
-        setLoading(false)
-      })
-      rzp.open()
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Unknown error"
-      toast.error(`Error: ${message}. Please try again or contact support.`)
-    } finally {
-      setLoading(false)
+    } else {
+      console.error("[sendOrderEmail] ❌ Resend failed:", resendData)
     }
   }
 
-  return (
-    <div className="rounded-xl border border-border bg-card p-6 shadow-sm md:p-8">
-      <div className="mb-6 flex items-center gap-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
-          <ShoppingCart className="h-5 w-5 text-primary" />
-        </div>
-        <div>
-          <h2 className="text-xl font-bold text-foreground">Place Your Order</h2>
-          <p className="text-sm text-muted-foreground">Select your service and fill in the details</p>
-        </div>
-      </div>
+  // ── OPTION 2: Gmail SMTP (works locally) ──
+  const smtpUser = process.env.SMTP_USER
+  const smtpPass = process.env.SMTP_PASS
+  console.log("[sendOrderEmail] SMTP_USER present:", !!smtpUser)
 
-      <div className="flex flex-col gap-5">
-        {/* Platform */}
-        <div className="flex flex-col gap-2">
-          <Label className="text-sm font-medium text-foreground">Our Services</Label>
-          <Select value={platform} onValueChange={handlePlatformChange}>
-            <SelectTrigger className="bg-background">
-              <SelectValue placeholder="Select Platform" />
-            </SelectTrigger>
-            <SelectContent>
-              {platformsData
-                .filter((p) => p.clickable)
-                .map((p) => (
-                  <SelectItem key={p.name} value={p.name}>
-                    {p.name}
-                  </SelectItem>
-                ))}
-            </SelectContent>
-          </Select>
-        </div>
+  if (smtpUser && smtpPass) {
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: { user: smtpUser, pass: smtpPass },
+      pool: false,
+    })
+    await transporter.sendMail({
+      from: `"HTG Studio Orders" <${smtpUser}>`,
+      to: RECIPIENT_EMAIL,
+      subject,
+      text: textContent,
+      html: htmlContent,
+    })
+    console.log("[sendOrderEmail] ✅ Sent via Gmail SMTP to", RECIPIENT_EMAIL)
+    return
+  }
 
-        {/* Category */}
-        {selectedPlatform && selectedPlatform.clickable && (
-          <div className="flex flex-col gap-2">
-            <Label className="text-sm font-medium text-foreground">Category</Label>
-            <Select value={category} onValueChange={handleCategoryChange}>
-              <SelectTrigger className="bg-background">
-                <SelectValue placeholder="Select Category" />
-              </SelectTrigger>
-              <SelectContent>
-                {selectedPlatform.categories.map((c) => (
-                  <SelectItem key={c.name} value={c.name}>
-                    {c.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        )}
-
-        {/* Service */}
-        {selectedCategory && (
-          <div className="flex flex-col gap-2">
-            <Label className="text-sm font-medium text-foreground">Service</Label>
-            <Select value={service} onValueChange={handleServiceChange}>
-              <SelectTrigger className="bg-background">
-                <SelectValue placeholder="Select Service" />
-              </SelectTrigger>
-              <SelectContent className="w-[var(--radix-select-trigger-width)] max-w-[calc(100vw-2rem)]">
-                {selectedCategory.services.map((s, idx) => (
-                  <SelectItem key={idx} value={s.name} className="items-start">
-                    <div className="flex flex-col gap-0.5 py-0.5">
-                      <span className="whitespace-normal break-words leading-snug">{s.name}</span>
-                      <span className="font-semibold text-primary text-xs">Rs.{s.price}/1000</span>
-                    </div>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        )}
-
-        {/* Selected service info */}
-        {selectedService && (
-          <div className="rounded-lg border border-primary/20 bg-primary/5 p-4">
-            <p className="mb-1 text-xs font-medium uppercase tracking-wider text-primary">Selected Service</p>
-            <p className="text-sm leading-relaxed text-foreground">{selectedService.name}</p>
-            <p className="mt-1 text-sm font-semibold text-primary">
-              Rs.{selectedService.price} per 1000
-              {selectedService.minOrder && (
-                <span className="ml-2 text-xs font-normal text-muted-foreground">
-                  (Min. order: {selectedService.minOrder})
-                </span>
-              )}
-            </p>
-          </div>
-        )}
-
-        {/* Link */}
-        <div className="flex flex-col gap-2">
-          <Label className="text-sm font-medium text-foreground">Account / Post Link</Label>
-          <Input
-            value={link}
-            onChange={(e) => setLink(e.target.value)}
-            placeholder="https://www.youtube.com/watch?v=... or profile link"
-            className="bg-background"
-          />
-        </div>
-
-        {/* Quantity */}
-        <div className="flex flex-col gap-2">
-          <Label className="text-sm font-medium text-foreground">Quantity</Label>
-          <Input
-            type="number"
-            value={quantity}
-            onChange={(e) => setQuantity(e.target.value)}
-            placeholder={selectedService?.minOrder ? `Minimum ${selectedService.minOrder}` : "Enter quantity"}
-            min={selectedService?.minOrder || 1}
-            className="bg-background"
-          />
-        </div>
-
-        {/* Email */}
-        <div className="flex flex-col gap-2">
-          <Label className="text-sm font-medium text-foreground">Email Address</Label>
-          <Input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="your@email.com"
-            className="bg-background"
-          />
-        </div>
-
-        {/* Contact */}
-        <div className="flex flex-col gap-2">
-          <Label className="text-sm font-medium text-foreground">Telegram Username / Phone Number</Label>
-          <Input
-            value={contact}
-            onChange={(e) => setContact(e.target.value)}
-            placeholder="@username or +91XXXXXXXXXX"
-            className="bg-background"
-          />
-        </div>
-
-        {/* Price */}
-        {selectedService && quantity && Number(quantity) > 0 && (
-          <div className="rounded-lg border border-accent/30 bg-accent/10 p-4">
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-foreground">Total Charges</span>
-              <span className="flex items-center text-2xl font-bold text-accent-foreground">
-                <IndianRupee className="mr-1 h-5 w-5" />
-                {totalPrice.toFixed(2)}
-              </span>
-            </div>
-            {totalPrice < siteConfig.minOrderValue && (
-              <p className="mt-2 text-xs text-destructive">
-                Minimum order value is Rs.{siteConfig.minOrderValue}
-              </p>
-            )}
-          </div>
-        )}
-
-        {/* Terms */}
-        <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/50 p-4">
-          <Checkbox
-            id="terms"
-            checked={termsAccepted}
-            onCheckedChange={(checked) => setTermsAccepted(checked === true)}
-            className="mt-0.5"
-          />
-          <Label htmlFor="terms" className="text-sm leading-relaxed text-muted-foreground">
-            I accept the{" "}
-            <a href="/terms" target="_blank" className="font-medium text-primary underline">
-              Terms & Conditions
-            </a>
-            ,{" "}
-            <a href="/refund-policy" target="_blank" className="font-medium text-primary underline">
-              Refund Policy
-            </a>
-            , and understand that services are non-refundable once delivered.
-          </Label>
-        </div>
-
-        {/* Submit */}
-        <Button
-          onClick={handlePlaceOrder}
-          disabled={loading || !termsAccepted}
-          size="lg"
-          className="w-full bg-primary text-primary-foreground hover:bg-primary/90"
-        >
-          {loading ? (
-            "Processing..."
-          ) : (
-            <>
-              Place Order <ChevronRight className="ml-2 h-4 w-4" />
-            </>
-          )}
-        </Button>
-      </div>
-    </div>
-  )
+  console.warn("[sendOrderEmail] ⚠️ No email service available. Order logged to console only.")
 }
