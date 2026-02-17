@@ -673,7 +673,7 @@ export function OrderForm() {
             <a href="/terms" target="_blank" className="font-medium text-primary underline">
               Terms & Conditions
             </a>
-            And {" "}
+            ,{" "}
             <a href="/refund-policy" target="_blank" className="font-medium text-primary underline">
               Refund Policy
             </a>
