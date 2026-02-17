@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useCallback } from "react"
+import { useEffect, useState, useCallback, useRef } from "react"
 import Image from "next/image"
 import { Heart, TrendingUp, Users, Eye } from "lucide-react"
 
@@ -73,7 +73,7 @@ const scrollingItems: PlatformItem[] = [
 
 // 6 images in /public named 1.jpg → 6.jpg
 const CAROUSEL_IMAGES = ["/1.jpg", "/2.jpg", "/3.jpg", "/4.jpg", "/5.jpg", "/6.jpg"]
-const SLIDE_DURATION = 6000 // ms
+const SLIDE_DURATION = 3000 // ms
 
 function PlatformIcon({ platform }: { platform: PlatformItem["platform"] }) {
   if (platform === "youtube")   return <YouTubeLogo   className="h-4 w-4 flex-shrink-0" />
@@ -88,35 +88,70 @@ export function HeroSection() {
   const [current, setCurrent]   = useState(0)
   const [visible, setVisible]   = useState(true)
 
+  // Touch swipe tracking
+  const touchStartX = useRef<number | null>(null)
+  const touchStartY = useRef<number | null>(null)
+
   useEffect(() => { setMounted(true) }, [])
+
+  const goTo = useCallback((index: number) => {
+    setVisible(false)
+    setTimeout(() => {
+      setCurrent(index)
+      setVisible(true)
+    }, 300)
+  }, [])
 
   // Auto-advance carousel every SLIDE_DURATION ms
   const advance = useCallback(() => {
-    setVisible(false)
-    setTimeout(() => {
-      setCurrent(prev => (prev + 1) % CAROUSEL_IMAGES.length)
-      setVisible(true)
-    }, 400)
-  }, [])
+    goTo((current + 1) % CAROUSEL_IMAGES.length)
+  }, [current, goTo])
 
   useEffect(() => {
     const id = setInterval(advance, SLIDE_DURATION)
     return () => clearInterval(id)
   }, [advance])
 
+  // Touch handlers
+  const handleTouchStart = (e: React.TouchEvent) => {
+    touchStartX.current = e.touches[0].clientX
+    touchStartY.current = e.touches[0].clientY
+  }
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (touchStartX.current === null || touchStartY.current === null) return
+    const dx = e.changedTouches[0].clientX - touchStartX.current
+    const dy = e.changedTouches[0].clientY - touchStartY.current
+    // Only trigger if horizontal swipe is dominant and > 40px
+    if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 40) {
+      if (dx < 0) {
+        goTo((current + 1) % CAROUSEL_IMAGES.length)       // swipe left → next
+      } else {
+        goTo((current - 1 + CAROUSEL_IMAGES.length) % CAROUSEL_IMAGES.length) // swipe right → prev
+      }
+    }
+    touchStartX.current = null
+    touchStartY.current = null
+  }
+
   return (
     <section className="relative overflow-hidden bg-background">
 
       {/* ── Image Carousel ───────────────────────────────────────────────── */}
-      <div className="relative w-full" style={{ aspectRatio: "16/9", maxHeight: "560px" }}>
-        {/* Only a very subtle bottom fade so the dots are readable — NO heavy overlay */}
+      <div
+        className="relative w-full select-none"
+        style={{ aspectRatio: "16/9", maxHeight: "560px" }}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
+      >
+        {/* Subtle bottom fade for dot visibility only */}
         <div className="pointer-events-none absolute bottom-0 left-0 right-0 z-10 h-16 bg-gradient-to-t from-black/40 to-transparent" />
 
         {/* Slides */}
         {CAROUSEL_IMAGES.map((src, i) => (
           <div
             key={src}
-            className="absolute inset-0 transition-opacity duration-500 ease-in-out"
+            className="absolute inset-0 transition-opacity duration-300 ease-in-out"
             style={{ opacity: i === current && visible ? 1 : 0 }}
           >
             <Image
@@ -131,14 +166,14 @@ export function HeroSection() {
         ))}
 
         {/* Dot indicators */}
-        <div className="absolute bottom-4 left-1/2 z-20 flex -translate-x-1/2 gap-2">
+        <div className="absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 gap-1.5">
           {CAROUSEL_IMAGES.map((_, i) => (
             <button
               key={i}
-              onClick={() => { setVisible(false); setTimeout(() => { setCurrent(i); setVisible(true) }, 400) }}
+              onClick={() => goTo(i)}
               className={`rounded-full transition-all duration-300 ${
                 i === current
-                  ? "h-2 w-6 bg-primary"
+                  ? "h-2 w-5 bg-primary"
                   : "h-2 w-2 bg-white/50 hover:bg-white/70"
               }`}
               aria-label={`Go to slide ${i + 1}`}
@@ -147,29 +182,32 @@ export function HeroSection() {
         </div>
       </div>
 
-      {/* ── Hero Text (clearly BELOW the carousel, no overlap) ─────────────── */}
-      <div className="mx-auto max-w-6xl px-4 pt-8 pb-2">
+      {/* ── Hero Text (below carousel, no overlap) ─────────────────────────── */}
+      <div className="mx-auto max-w-6xl px-4 pt-5 pb-2">
         <div className="text-center">
-          <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-4 py-1.5 text-xs font-semibold uppercase tracking-widest text-primary">
+
+          {/* Badge */}
+          <div className="mb-2 inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-semibold uppercase tracking-widest text-primary">
             <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
             Trusted Growth Platform
           </div>
 
-          <h2 className="font-display text-balance text-3xl font-extrabold tracking-tight text-foreground md:text-5xl lg:text-6xl">
+          {/* Headline — max 2 lines on mobile */}
+          <h1 className="font-display text-balance text-3xl font-extrabold leading-tight tracking-tight text-foreground md:text-5xl">
             Loved by millions{" "}
             <span className="bg-gradient-to-r from-primary to-[hsl(142,72%,50%)] bg-clip-text text-transparent">
               all over the world
             </span>
             {" "}❤️
-          </h2>
+          </h1>
 
-          <p className="mx-auto mt-4 max-w-2xl text-pretty text-base text-muted-foreground md:text-lg">
+          <p className="mx-auto mt-2.5 max-w-2xl text-pretty text-sm text-muted-foreground md:text-base">
             Grow your social media presence with our fast, reliable, and affordable services.
             Instant delivery, real results.
           </p>
 
-          {/* Platform badges */}
-          <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
+          {/* Platform badges — single row, no wrap */}
+          <div className="mt-4 flex items-center justify-center gap-2">
             {[
               { Logo: YouTubeLogo,   name: "YouTube"   },
               { Logo: InstagramLogo, name: "Instagram" },
@@ -177,10 +215,10 @@ export function HeroSection() {
             ].map(({ Logo, name }) => (
               <div
                 key={name}
-                className="flex items-center gap-2 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium text-foreground shadow-sm transition-transform hover:-translate-y-0.5"
+                className="flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground shadow-sm"
               >
-                <Logo className="h-5 w-5" />
-                {name}
+                <Logo className="h-4 w-4 flex-shrink-0" />
+                <span className="whitespace-nowrap">{name}</span>
               </div>
             ))}
           </div>
