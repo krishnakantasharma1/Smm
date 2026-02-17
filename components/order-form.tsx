@@ -321,8 +321,12 @@ export function OrderForm() {
           <div className="flex flex-col gap-2">
             <Label className="text-sm font-medium text-foreground">Service</Label>
             <Select value={service} onValueChange={handleServiceChange}>
-              <SelectTrigger className="bg-background">
-                <SelectValue placeholder="Select Service" />
+              <SelectTrigger className="bg-background overflow-hidden">
+                <SelectValue placeholder="Select Service">
+                  {service && (
+                    <span className="block truncate text-sm">{service}</span>
+                  )}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent className="w-[var(--radix-select-trigger-width)] max-w-[calc(100vw-2.5rem)] overflow-x-hidden">
                 {selectedCategory.services.map((s, idx) => (
