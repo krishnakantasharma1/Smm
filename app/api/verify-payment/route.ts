@@ -40,7 +40,6 @@ export async function POST(request: Request) {
     }
 
     const keySecret = process.env.RAZORPAY_KEY_SECRET
-
     if (!keySecret) {
       console.error("[verify-payment] Missing RAZORPAY_KEY_SECRET")
       return NextResponse.json(
@@ -61,16 +60,20 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           success: false,
-          error: `Payment signature verification failed. If money was deducted, please contact support with payment ID: ${razorpay_payment_id}`,
+          error: `Payment signature verification failed. If money was deducted, contact support with payment ID: ${razorpay_payment_id}`,
         },
         { status: 400 }
       )
     }
 
-    // Signature verified — send email in background
-    sendOrderEmail(orderDetails as OrderDetails, razorpay_payment_id, razorpay_order_id)
-      .then(() => console.log("[verify-payment] Email sent for order:", razorpay_order_id))
-      .catch((err) => console.error("[verify-payment] All email methods failed:", err))
+    // IMPORTANT: await the email — do NOT fire-and-forget on Vercel
+    // Vercel kills background tasks the moment the response is sent
+    try {
+      await sendOrderEmail(orderDetails as OrderDetails, razorpay_payment_id, razorpay_order_id)
+    } catch (emailErr) {
+      // Log but don't block the success response
+      console.error("[verify-payment] Email failed:", emailErr)
+    }
 
     return NextResponse.json({ success: true })
   } catch (err) {
@@ -170,64 +173,60 @@ Email      : ${orderDetails.email}
 Contact    : ${orderDetails.contact}
   `.trim()
 
-  // Always log as failsafe
-  console.log("[sendOrderEmail] New order:\n" + textContent)
+  console.log("[sendOrderEmail] Attempting to send email for payment:", paymentId)
 
-  // ── OPTION 1: Resend API (works on Vercel — try this FIRST) ──
+  // ── OPTION 1: Resend API (works on Vercel) ──
   const resendKey = process.env.RESEND_API_KEY
+  console.log("[sendOrderEmail] RESEND_API_KEY present:", !!resendKey)
+
   if (resendKey) {
-    try {
-      const resendRes = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${resendKey}`,
-        },
-        body: JSON.stringify({
-          // Use Resend's free onboarding domain if you haven't verified your own
-          from: "HTG Studio Orders <onboarding@resend.dev>",
-          to: RECIPIENT_EMAIL,
-          subject,
-          html: htmlContent,
-          text: textContent,
-        }),
-      })
-
-      if (resendRes.ok) {
-        console.log("[sendOrderEmail] ✅ Sent via Resend to", RECIPIENT_EMAIL)
-        return
-      } else {
-        const err = await resendRes.text()
-        console.error("[sendOrderEmail] Resend failed:", err)
-      }
-    } catch (e) {
-      console.error("[sendOrderEmail] Resend threw:", e)
-    }
-  }
-
-  // ── OPTION 2: Gmail SMTP via Nodemailer (works locally) ──
-  const smtpUser = process.env.SMTP_USER
-  const smtpPass = process.env.SMTP_PASS
-  if (smtpUser && smtpPass) {
-    try {
-      const transporter = nodemailer.createTransport({
-        service: "gmail",
-        auth: { user: smtpUser, pass: smtpPass },
-        pool: false,
-      })
-      await transporter.sendMail({
-        from: `"HTG Studio Orders" <${smtpUser}>`,
+    const resendRes = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${resendKey}`,
+      },
+      body: JSON.stringify({
+        from: "onboarding@resend.dev",
         to: RECIPIENT_EMAIL,
         subject,
-        text: textContent,
         html: htmlContent,
-      })
-      console.log("[sendOrderEmail] ✅ Sent via Gmail SMTP to", RECIPIENT_EMAIL)
+        text: textContent,
+      }),
+    })
+
+    const resendData = await resendRes.json()
+    console.log("[sendOrderEmail] Resend response:", resendRes.status, JSON.stringify(resendData))
+
+    if (resendRes.ok) {
+      console.log("[sendOrderEmail] ✅ Sent via Resend to", RECIPIENT_EMAIL)
       return
-    } catch (e) {
-      console.error("[sendOrderEmail] Gmail SMTP failed:", e)
+    } else {
+      console.error("[sendOrderEmail] ❌ Resend failed:", resendData)
     }
   }
 
-  console.warn("[sendOrderEmail] ⚠️ All email methods failed. Order is logged to console above.")
+  // ── OPTION 2: Gmail SMTP (works locally) ──
+  const smtpUser = process.env.SMTP_USER
+  const smtpPass = process.env.SMTP_PASS
+  console.log("[sendOrderEmail] SMTP_USER present:", !!smtpUser)
+
+  if (smtpUser && smtpPass) {
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: { user: smtpUser, pass: smtpPass },
+      pool: false,
+    })
+    await transporter.sendMail({
+      from: `"HTG Studio Orders" <${smtpUser}>`,
+      to: RECIPIENT_EMAIL,
+      subject,
+      text: textContent,
+      html: htmlContent,
+    })
+    console.log("[sendOrderEmail] ✅ Sent via Gmail SMTP to", RECIPIENT_EMAIL)
+    return
+  }
+
+  console.warn("[sendOrderEmail] ⚠️ No email service available. Order logged to console only.")
 }
