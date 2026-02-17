@@ -11,12 +11,18 @@ export function SiteHeader() {
   const [hasOrders, setHasOrders] = useState(false)
 
   useEffect(() => {
-    try {
-      const orders = JSON.parse(localStorage.getItem("htg_orders") || "[]")
-      setHasOrders(orders.length > 0)
-    } catch {
-      setHasOrders(false)
+    const checkOrders = () => {
+      try {
+        const orders = JSON.parse(localStorage.getItem("htg_orders") || "[]")
+        setHasOrders(orders.length > 0)
+      } catch {
+        setHasOrders(false)
+      }
     }
+    checkOrders()
+    // Update instantly when a new order is placed (no refresh needed)
+    window.addEventListener("htg_orders_updated", checkOrders)
+    return () => window.removeEventListener("htg_orders_updated", checkOrders)
   }, [])
 
   const navLinks = [

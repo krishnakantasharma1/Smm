@@ -211,6 +211,8 @@ export function OrderForm() {
                 }
                 existingOrders.unshift(newOrder)
                 localStorage.setItem("htg_orders", JSON.stringify(existingOrders))
+                // Notify header to show My Orders instantly without refresh
+                window.dispatchEvent(new Event("htg_orders_updated"))
               } catch (e) {
                 console.error("Failed to save order locally:", e)
               }
@@ -322,12 +324,12 @@ export function OrderForm() {
               <SelectTrigger className="bg-background">
                 <SelectValue placeholder="Select Service" />
               </SelectTrigger>
-              <SelectContent className="w-[var(--radix-select-trigger-width)] max-w-[calc(100vw-2rem)]">
+              <SelectContent className="w-[var(--radix-select-trigger-width)] max-w-[calc(100vw-2.5rem)] overflow-x-hidden">
                 {selectedCategory.services.map((s, idx) => (
-                  <SelectItem key={idx} value={s.name} className="items-start">
-                    <div className="flex flex-col gap-0.5 py-0.5">
-                      <span className="whitespace-normal break-words leading-snug">{s.name}</span>
-                      <span className="font-semibold text-primary text-xs">Rs.{s.price}/1000</span>
+                  <SelectItem key={idx} value={s.name} className="items-start pr-2 [&>span:first-child]:hidden">
+                    <div className="flex w-full flex-col gap-0.5 py-0.5 min-w-0">
+                      <span className="block whitespace-normal break-words leading-snug text-sm">{s.name}</span>
+                      <span className="block font-semibold text-primary text-xs">Rs.{s.price}/1000</span>
                     </div>
                   </SelectItem>
                 ))}
