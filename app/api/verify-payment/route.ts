@@ -25,7 +25,6 @@ export async function POST(request: Request) {
       orderDetails,
     } = body
 
-    // Validate payment fields
     if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
       return NextResponse.json(
         { success: false, error: "Missing payment details. Please contact support." },
@@ -68,10 +67,10 @@ export async function POST(request: Request) {
       )
     }
 
-    // Signature verified — send email notification (best effort, don't block response)
+    // Signature verified — send email in background
     sendOrderEmail(orderDetails as OrderDetails, razorpay_payment_id, razorpay_order_id)
       .then(() => console.log("[verify-payment] Email sent for order:", razorpay_order_id))
-      .catch((err) => console.error("[verify-payment] Email failed for order:", razorpay_order_id, err))
+      .catch((err) => console.error("[verify-payment] All email methods failed:", err))
 
     return NextResponse.json({ success: true })
   } catch (err) {
@@ -90,12 +89,13 @@ async function sendOrderEmail(
 ): Promise<void> {
   const dateStr = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })
 
+  const subject = `New Order ✅ ${orderDetails.platform} | ${orderDetails.category} | Rs.${orderDetails.totalPrice}`
+
   const htmlContent = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
       <div style="background: #0066FF; padding: 16px 20px; border-radius: 6px 6px 0 0; margin: -20px -20px 20px;">
         <h2 style="color: #ffffff; margin: 0; font-size: 20px;">🛒 New Order Received!</h2>
       </div>
-
       <h3 style="color: #333; margin-top: 0;">Order Details</h3>
       <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
         <tr style="background: #f8f9fa;">
@@ -131,7 +131,6 @@ async function sendOrderEmail(
           <td style="padding: 10px 12px; border: 1px solid #dee2e6; font-weight: bold; color: #0066FF; font-size: 16px;">Rs.${orderDetails.totalPrice}</td>
         </tr>
       </table>
-
       <h3 style="color: #333;">Customer Details</h3>
       <table style="width: 100%; border-collapse: collapse;">
         <tr style="background: #f8f9fa;">
@@ -143,10 +142,8 @@ async function sendOrderEmail(
           <td style="padding: 10px 12px; border: 1px solid #dee2e6;">${orderDetails.contact}</td>
         </tr>
       </table>
-
       <p style="color: #888; margin-top: 20px; font-size: 12px; border-top: 1px solid #eee; padding-top: 12px;">
-        Order received on: ${dateStr}<br/>
-        HTG Studio — Social Media Growth Services
+        Order received on: ${dateStr}<br/>HTG Studio — Social Media Growth Services
       </p>
     </div>
   `
@@ -173,27 +170,51 @@ Email      : ${orderDetails.email}
 Contact    : ${orderDetails.contact}
   `.trim()
 
-  // Always log to Vercel console as failsafe
+  // Always log as failsafe
   console.log("[sendOrderEmail] New order:\n" + textContent)
 
-  const subject = `New Order ✅ ${orderDetails.platform} | ${orderDetails.category} | Rs.${orderDetails.totalPrice}`
+  // ── OPTION 1: Resend API (works on Vercel — try this FIRST) ──
+  const resendKey = process.env.RESEND_API_KEY
+  if (resendKey) {
+    try {
+      const resendRes = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${resendKey}`,
+        },
+        body: JSON.stringify({
+          // Use Resend's free onboarding domain if you haven't verified your own
+          from: "HTG Studio Orders <onboarding@resend.dev>",
+          to: RECIPIENT_EMAIL,
+          subject,
+          html: htmlContent,
+          text: textContent,
+        }),
+      })
 
+      if (resendRes.ok) {
+        console.log("[sendOrderEmail] ✅ Sent via Resend to", RECIPIENT_EMAIL)
+        return
+      } else {
+        const err = await resendRes.text()
+        console.error("[sendOrderEmail] Resend failed:", err)
+      }
+    } catch (e) {
+      console.error("[sendOrderEmail] Resend threw:", e)
+    }
+  }
+
+  // ── OPTION 2: Gmail SMTP via Nodemailer (works locally) ──
   const smtpUser = process.env.SMTP_USER
   const smtpPass = process.env.SMTP_PASS
-
-  // --- Primary: Gmail SMTP via Nodemailer ---
   if (smtpUser && smtpPass) {
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: {
-        user: smtpUser,
-        pass: smtpPass,
-      },
-      // Ensure connection is closed after sending
-      pool: false,
-    })
-
     try {
+      const transporter = nodemailer.createTransport({
+        service: "gmail",
+        auth: { user: smtpUser, pass: smtpPass },
+        pool: false,
+      })
       await transporter.sendMail({
         from: `"HTG Studio Orders" <${smtpUser}>`,
         to: RECIPIENT_EMAIL,
@@ -201,43 +222,12 @@ Contact    : ${orderDetails.contact}
         text: textContent,
         html: htmlContent,
       })
-      console.log("[sendOrderEmail] Sent via Gmail SMTP to", RECIPIENT_EMAIL)
+      console.log("[sendOrderEmail] ✅ Sent via Gmail SMTP to", RECIPIENT_EMAIL)
       return
-    } catch (gmailErr) {
-      console.error("[sendOrderEmail] Gmail SMTP failed:", gmailErr)
-      // Fall through to Resend fallback
+    } catch (e) {
+      console.error("[sendOrderEmail] Gmail SMTP failed:", e)
     }
   }
 
-  // --- Fallback: Resend API ---
-  const resendKey = process.env.RESEND_API_KEY
-  if (resendKey) {
-    const resendRes = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${resendKey}`,
-      },
-      body: JSON.stringify({
-        from: "HTG Studio Orders <orders@htgstudio.com>",
-        to: RECIPIENT_EMAIL,
-        subject,
-        html: htmlContent,
-        text: textContent,
-      }),
-    })
-
-    if (resendRes.ok) {
-      console.log("[sendOrderEmail] Sent via Resend to", RECIPIENT_EMAIL)
-      return
-    } else {
-      const resendError = await resendRes.text()
-      console.error("[sendOrderEmail] Resend failed:", resendError)
-    }
-  }
-
-  console.warn(
-    "[sendOrderEmail] No email service configured (SMTP_USER+SMTP_PASS or RESEND_API_KEY missing). " +
-    "Order was logged to console above. Please add env vars in Vercel dashboard."
-  )
+  console.warn("[sendOrderEmail] ⚠️ All email methods failed. Order is logged to console above.")
 }
