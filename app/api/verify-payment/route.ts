@@ -4,16 +4,28 @@ import nodemailer from "nodemailer"
 
 const RECIPIENT_EMAIL = "htgstudio0@gmail.com"
 
+interface OrderDetails {
+  platform: string
+  category: string
+  service: string
+  link: string
+  quantity: string
+  totalPrice: number
+  email: string
+  contact: string
+}
+
 export async function POST(request: Request) {
   try {
+    const body = await request.json()
     const {
       razorpay_payment_id,
       razorpay_order_id,
       razorpay_signature,
       orderDetails,
-    } = await request.json()
+    } = body
 
-    // Validate required fields
+    // Validate payment fields
     if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
       return NextResponse.json(
         { success: false, error: "Missing payment details. Please contact support." },
@@ -31,36 +43,39 @@ export async function POST(request: Request) {
     const keySecret = process.env.RAZORPAY_KEY_SECRET
 
     if (!keySecret) {
-      console.error("Missing RAZORPAY_KEY_SECRET environment variable")
+      console.error("[verify-payment] Missing RAZORPAY_KEY_SECRET")
       return NextResponse.json(
         { success: false, error: "Payment gateway is not configured. Please contact support." },
         { status: 500 }
       )
     }
 
-    // Verify signature
-    const body = `${razorpay_order_id}|${razorpay_payment_id}`
+    // Verify Razorpay signature
+    const signatureBody = `${razorpay_order_id}|${razorpay_payment_id}`
     const expectedSignature = crypto
       .createHmac("sha256", keySecret)
-      .update(body)
+      .update(signatureBody)
       .digest("hex")
 
     if (expectedSignature !== razorpay_signature) {
-      console.error("Payment signature mismatch:", { razorpay_order_id, razorpay_payment_id })
+      console.error("[verify-payment] Signature mismatch for order:", razorpay_order_id)
       return NextResponse.json(
-        { success: false, error: "Payment signature verification failed. If money was deducted, please contact support with your payment ID: " + razorpay_payment_id },
+        {
+          success: false,
+          error: `Payment signature verification failed. If money was deducted, please contact support with payment ID: ${razorpay_payment_id}`,
+        },
         { status: 400 }
       )
     }
 
-    // Payment verified - send email in background (don't block the response)
-    sendOrderEmail(orderDetails, razorpay_payment_id, razorpay_order_id).catch((emailError) => {
-      console.error("Failed to send email notification:", emailError)
-    })
+    // Signature verified — send email notification (best effort, don't block response)
+    sendOrderEmail(orderDetails as OrderDetails, razorpay_payment_id, razorpay_order_id)
+      .then(() => console.log("[verify-payment] Email sent for order:", razorpay_order_id))
+      .catch((err) => console.error("[verify-payment] Email failed for order:", razorpay_order_id, err))
 
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error("Verify payment error:", err)
+    console.error("[verify-payment] Unhandled error:", err)
     return NextResponse.json(
       { success: false, error: "Server error during payment verification. Please contact support." },
       { status: 500 }
@@ -69,104 +84,104 @@ export async function POST(request: Request) {
 }
 
 async function sendOrderEmail(
-  orderDetails: {
-    platform: string
-    category: string
-    service: string
-    link: string
-    quantity: string
-    totalPrice: number
-    email: string
-    contact: string
-  },
+  orderDetails: OrderDetails,
   paymentId: string,
   orderId: string
-) {
+): Promise<void> {
   const dateStr = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })
 
   const htmlContent = `
-    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-      <h2 style="color: #0066FF; border-bottom: 2px solid #0066FF; padding-bottom: 10px;">New Order Received!</h2>
-      
-      <table style="width: 100%; border-collapse: collapse; margin-top: 15px;">
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
+      <div style="background: #0066FF; padding: 16px 20px; border-radius: 6px 6px 0 0; margin: -20px -20px 20px;">
+        <h2 style="color: #ffffff; margin: 0; font-size: 20px;">🛒 New Order Received!</h2>
+      </div>
+
+      <h3 style="color: #333; margin-top: 0;">Order Details</h3>
+      <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
         <tr style="background: #f8f9fa;">
-          <td style="padding: 10px; font-weight: bold; border: 1px solid #dee2e6;">Payment ID</td>
-          <td style="padding: 10px; border: 1px solid #dee2e6;">${paymentId}</td>
+          <td style="padding: 10px 12px; font-weight: bold; border: 1px solid #dee2e6; width: 40%;">Payment ID</td>
+          <td style="padding: 10px 12px; border: 1px solid #dee2e6; font-family: monospace;">${paymentId}</td>
         </tr>
         <tr>
-          <td style="padding: 10px; font-weight: bold; border: 1px solid #dee2e6;">Order ID</td>
-          <td style="padding: 10px; border: 1px solid #dee2e6;">${orderId}</td>
+          <td style="padding: 10px 12px; font-weight: bold; border: 1px solid #dee2e6;">Order ID</td>
+          <td style="padding: 10px 12px; border: 1px solid #dee2e6; font-family: monospace;">${orderId}</td>
         </tr>
         <tr style="background: #f8f9fa;">
-          <td style="padding: 10px; font-weight: bold; border: 1px solid #dee2e6;">Platform</td>
-          <td style="padding: 10px; border: 1px solid #dee2e6;">${orderDetails.platform}</td>
+          <td style="padding: 10px 12px; font-weight: bold; border: 1px solid #dee2e6;">Platform</td>
+          <td style="padding: 10px 12px; border: 1px solid #dee2e6;">${orderDetails.platform}</td>
         </tr>
         <tr>
-          <td style="padding: 10px; font-weight: bold; border: 1px solid #dee2e6;">Category</td>
-          <td style="padding: 10px; border: 1px solid #dee2e6;">${orderDetails.category}</td>
+          <td style="padding: 10px 12px; font-weight: bold; border: 1px solid #dee2e6;">Category</td>
+          <td style="padding: 10px 12px; border: 1px solid #dee2e6;">${orderDetails.category}</td>
         </tr>
         <tr style="background: #f8f9fa;">
-          <td style="padding: 10px; font-weight: bold; border: 1px solid #dee2e6;">Service</td>
-          <td style="padding: 10px; border: 1px solid #dee2e6;">${orderDetails.service}</td>
+          <td style="padding: 10px 12px; font-weight: bold; border: 1px solid #dee2e6;">Service</td>
+          <td style="padding: 10px 12px; border: 1px solid #dee2e6;">${orderDetails.service}</td>
         </tr>
         <tr>
-          <td style="padding: 10px; font-weight: bold; border: 1px solid #dee2e6;">Link</td>
-          <td style="padding: 10px; border: 1px solid #dee2e6;"><a href="${orderDetails.link}">${orderDetails.link}</a></td>
+          <td style="padding: 10px 12px; font-weight: bold; border: 1px solid #dee2e6;">Link</td>
+          <td style="padding: 10px 12px; border: 1px solid #dee2e6;"><a href="${orderDetails.link}" style="color: #0066FF;">${orderDetails.link}</a></td>
         </tr>
         <tr style="background: #f8f9fa;">
-          <td style="padding: 10px; font-weight: bold; border: 1px solid #dee2e6;">Quantity</td>
-          <td style="padding: 10px; border: 1px solid #dee2e6;">${orderDetails.quantity}</td>
+          <td style="padding: 10px 12px; font-weight: bold; border: 1px solid #dee2e6;">Quantity</td>
+          <td style="padding: 10px 12px; border: 1px solid #dee2e6;">${orderDetails.quantity}</td>
         </tr>
-        <tr>
-          <td style="padding: 10px; font-weight: bold; border: 1px solid #dee2e6; color: #0066FF;">Total Price</td>
-          <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold; color: #0066FF;">Rs.${orderDetails.totalPrice}</td>
+        <tr style="background: #e8f0fe;">
+          <td style="padding: 10px 12px; font-weight: bold; border: 1px solid #dee2e6; color: #0066FF;">Total Paid</td>
+          <td style="padding: 10px 12px; border: 1px solid #dee2e6; font-weight: bold; color: #0066FF; font-size: 16px;">Rs.${orderDetails.totalPrice}</td>
         </tr>
       </table>
 
-      <h3 style="color: #333; margin-top: 20px;">Customer Details</h3>
+      <h3 style="color: #333;">Customer Details</h3>
       <table style="width: 100%; border-collapse: collapse;">
         <tr style="background: #f8f9fa;">
-          <td style="padding: 10px; font-weight: bold; border: 1px solid #dee2e6;">Email</td>
-          <td style="padding: 10px; border: 1px solid #dee2e6;"><a href="mailto:${orderDetails.email}">${orderDetails.email}</a></td>
+          <td style="padding: 10px 12px; font-weight: bold; border: 1px solid #dee2e6; width: 40%;">Email</td>
+          <td style="padding: 10px 12px; border: 1px solid #dee2e6;"><a href="mailto:${orderDetails.email}" style="color: #0066FF;">${orderDetails.email}</a></td>
         </tr>
         <tr>
-          <td style="padding: 10px; font-weight: bold; border: 1px solid #dee2e6;">Contact</td>
-          <td style="padding: 10px; border: 1px solid #dee2e6;">${orderDetails.contact}</td>
+          <td style="padding: 10px 12px; font-weight: bold; border: 1px solid #dee2e6;">Contact</td>
+          <td style="padding: 10px 12px; border: 1px solid #dee2e6;">${orderDetails.contact}</td>
         </tr>
       </table>
 
-      <p style="color: #666; margin-top: 15px; font-size: 13px;">Order placed on: ${dateStr}</p>
+      <p style="color: #888; margin-top: 20px; font-size: 12px; border-top: 1px solid #eee; padding-top: 12px;">
+        Order received on: ${dateStr}<br/>
+        HTG Studio — Social Media Growth Services
+      </p>
     </div>
   `
 
   const textContent = `
-New Order Received!
-====================
-Payment ID: ${paymentId}
-Order ID: ${orderId}
+NEW ORDER RECEIVED — HTG Studio
+================================
+Payment ID : ${paymentId}
+Order ID   : ${orderId}
+Date       : ${dateStr}
 
-Platform: ${orderDetails.platform}
-Category: ${orderDetails.category}
-Service: ${orderDetails.service}
-Link: ${orderDetails.link}
-Quantity: ${orderDetails.quantity}
-Total Price: Rs.${orderDetails.totalPrice}
+SERVICE INFO
+------------
+Platform   : ${orderDetails.platform}
+Category   : ${orderDetails.category}
+Service    : ${orderDetails.service}
+Link       : ${orderDetails.link}
+Quantity   : ${orderDetails.quantity}
+Total Paid : Rs.${orderDetails.totalPrice}
 
-Customer Email: ${orderDetails.email}
-Customer Contact: ${orderDetails.contact}
-
-Date: ${dateStr}
+CUSTOMER
+--------
+Email      : ${orderDetails.email}
+Contact    : ${orderDetails.contact}
   `.trim()
 
-  // Log order details to console as backup
-  console.log("=== NEW ORDER ===")
-  console.log(textContent)
-  console.log("=================")
+  // Always log to Vercel console as failsafe
+  console.log("[sendOrderEmail] New order:\n" + textContent)
 
-  // Try sending via Nodemailer with Gmail SMTP
+  const subject = `New Order ✅ ${orderDetails.platform} | ${orderDetails.category} | Rs.${orderDetails.totalPrice}`
+
   const smtpUser = process.env.SMTP_USER
   const smtpPass = process.env.SMTP_PASS
 
+  // --- Primary: Gmail SMTP via Nodemailer ---
   if (smtpUser && smtpPass) {
     const transporter = nodemailer.createTransport({
       service: "gmail",
@@ -174,21 +189,27 @@ Date: ${dateStr}
         user: smtpUser,
         pass: smtpPass,
       },
+      // Ensure connection is closed after sending
+      pool: false,
     })
 
-    await transporter.sendMail({
-      from: `"HTG Studio Orders" <${smtpUser}>`,
-      to: RECIPIENT_EMAIL,
-      subject: `New Order - ${orderDetails.platform} | ${orderDetails.category} | Rs.${orderDetails.totalPrice}`,
-      text: textContent,
-      html: htmlContent,
-    })
-
-    console.log("Order email sent successfully to", RECIPIENT_EMAIL)
-    return
+    try {
+      await transporter.sendMail({
+        from: `"HTG Studio Orders" <${smtpUser}>`,
+        to: RECIPIENT_EMAIL,
+        subject,
+        text: textContent,
+        html: htmlContent,
+      })
+      console.log("[sendOrderEmail] Sent via Gmail SMTP to", RECIPIENT_EMAIL)
+      return
+    } catch (gmailErr) {
+      console.error("[sendOrderEmail] Gmail SMTP failed:", gmailErr)
+      // Fall through to Resend fallback
+    }
   }
 
-  // Fallback: Try Resend API
+  // --- Fallback: Resend API ---
   const resendKey = process.env.RESEND_API_KEY
   if (resendKey) {
     const resendRes = await fetch("https://api.resend.com/emails", {
@@ -198,23 +219,25 @@ Date: ${dateStr}
         Authorization: `Bearer ${resendKey}`,
       },
       body: JSON.stringify({
-        from: "orders@htgstudio.com",
+        from: "HTG Studio Orders <orders@htgstudio.com>",
         to: RECIPIENT_EMAIL,
-        subject: `New Order - ${orderDetails.platform} | ${orderDetails.category} | Rs.${orderDetails.totalPrice}`,
+        subject,
         html: htmlContent,
         text: textContent,
       }),
     })
 
-    if (!resendRes.ok) {
-      const resendError = await resendRes.text()
-      console.error("Resend API error:", resendError)
+    if (resendRes.ok) {
+      console.log("[sendOrderEmail] Sent via Resend to", RECIPIENT_EMAIL)
+      return
     } else {
-      console.log("Order email sent via Resend to", RECIPIENT_EMAIL)
+      const resendError = await resendRes.text()
+      console.error("[sendOrderEmail] Resend failed:", resendError)
     }
-    return
   }
 
-  console.warn("No email service configured (SMTP_USER/SMTP_PASS or RESEND_API_KEY). Order details logged to console only.")
+  console.warn(
+    "[sendOrderEmail] No email service configured (SMTP_USER+SMTP_PASS or RESEND_API_KEY missing). " +
+    "Order was logged to console above. Please add env vars in Vercel dashboard."
+  )
 }
-

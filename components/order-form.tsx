@@ -126,11 +126,21 @@ export function OrderForm() {
     setLoading(true)
 
     try {
-      // Check if Razorpay SDK is loaded
+      // Wait for Razorpay SDK to load (retry up to 5 seconds)
       if (typeof window.Razorpay === "undefined") {
-        toast.error("Payment gateway is loading. Please wait a moment and try again.")
-        setLoading(false)
-        return
+        let waited = 0
+        await new Promise<void>((resolve, reject) => {
+          const interval = setInterval(() => {
+            waited += 200
+            if (typeof window.Razorpay !== "undefined") {
+              clearInterval(interval)
+              resolve()
+            } else if (waited >= 5000) {
+              clearInterval(interval)
+              reject(new Error("Payment gateway failed to load. Please refresh the page and try again."))
+            }
+          }, 200)
+        })
       }
 
       const res = await fetch("/api/create-order", {
@@ -179,9 +189,10 @@ export function OrderForm() {
             const verifyData = await verifyRes.json()
 
             if (verifyData.success) {
-              toast.success("Order successfully placed \u2705 We will get back to you soon.", {
+              toast.success("✅ Payment successful! We will get back to you soon.", {
                 duration: 8000,
               })
+              // Reset entire form
               setPlatform("")
               setCategory("")
               setService("")
@@ -190,12 +201,15 @@ export function OrderForm() {
               setEmail("")
               setContact("")
               setTermsAccepted(false)
+              setLoading(false)
             } else {
               toast.error(verifyData.error || "Payment verification failed. Please contact support at htgstudio0@gmail.com")
+              setLoading(false)
             }
           } catch (err) {
             const message = err instanceof Error ? err.message : "Unknown error"
             toast.error(`Payment verification error: ${message}. Please contact support at htgstudio0@gmail.com`)
+            setLoading(false)
           }
         },
         modal: {
@@ -421,4 +435,3 @@ export function OrderForm() {
     </div>
   )
 }
-

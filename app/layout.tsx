@@ -41,8 +41,9 @@ export default function RootLayout({
     <html lang="en" className="dark">
       <head>
         <Script
+          id="razorpay-checkout"
           src="https://checkout.razorpay.com/v1/checkout.js"
-          strategy="beforeInteractive"
+          strategy="afterInteractive"
         />
       </head>
       <body className={`${dmSans.variable} ${syne.variable} font-sans antialiased`}>
@@ -56,5 +57,3 @@ export default function RootLayout({
     </html>
   )
 }
-
-
