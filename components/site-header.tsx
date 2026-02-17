@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button"
 export function SiteHeader() {
   const [mobileOpen, setMobileOpen] = useState(false)
   const [hasOrders, setHasOrders] = useState(false)
+  const [hasPending, setHasPending] = useState(false)
 
   useEffect(() => {
     const checkOrders = () => {
@@ -18,11 +19,21 @@ export function SiteHeader() {
       } catch {
         setHasOrders(false)
       }
+      try {
+        const pending = JSON.parse(localStorage.getItem("htg_pending_orders") || "[]")
+        setHasPending(pending.length > 0)
+      } catch {
+        setHasPending(false)
+      }
     }
     checkOrders()
-    // Update instantly when a new order is placed (no refresh needed)
     window.addEventListener("htg_orders_updated", checkOrders)
-    return () => window.removeEventListener("htg_orders_updated", checkOrders)
+    // Also re-check on storage changes (cross-tab sync)
+    window.addEventListener("storage", checkOrders)
+    return () => {
+      window.removeEventListener("htg_orders_updated", checkOrders)
+      window.removeEventListener("storage", checkOrders)
+    }
   }, [])
 
   const navLinks = [
@@ -30,6 +41,8 @@ export function SiteHeader() {
     { href: "/about", label: "About Us" },
     { href: "/contact", label: "Contact Us" },
   ]
+
+  const showMyOrders = hasOrders || hasPending
 
   return (
     <header className="sticky top-0 z-50 border-b border-border bg-card/80 backdrop-blur-md">
@@ -51,14 +64,19 @@ export function SiteHeader() {
               {link.label}
             </Link>
           ))}
-          {hasOrders && (
+          {showMyOrders && (
             <Link
               href="/my-orders"
               className="relative flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
             >
               <Package className="h-4 w-4" />
               My Orders
-              <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-primary" />
+              {hasPending && (
+                <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-amber-500 animate-pulse" />
+              )}
+              {!hasPending && hasOrders && (
+                <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-primary" />
+              )}
             </Link>
           )}
         </nav>
@@ -87,7 +105,7 @@ export function SiteHeader() {
                 {link.label}
               </Link>
             ))}
-            {hasOrders && (
+            {showMyOrders && (
               <Link
                 href="/my-orders"
                 onClick={() => setMobileOpen(false)}
@@ -95,6 +113,9 @@ export function SiteHeader() {
               >
                 <Package className="h-4 w-4" />
                 My Orders
+                {hasPending && (
+                  <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+                )}
               </Link>
             )}
           </nav>
@@ -103,3 +124,4 @@ export function SiteHeader() {
     </header>
   )
 }
+

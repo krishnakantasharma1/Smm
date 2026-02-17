@@ -3,7 +3,7 @@ import { NextResponse } from "next/server"
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { amount } = body
+    const { amount, orderDetails, deviceId } = body
 
     // Validate amount
     const parsedAmount = Number(amount)
@@ -28,6 +28,21 @@ export async function POST(request: Request) {
     const amountInPaise = Math.round(parsedAmount * 100)
     const receipt = `rcpt_${Date.now()}`
 
+    // Store order details + device ID in Razorpay notes for server-side recovery
+    // Razorpay notes have a 512 char limit per value, so we store key fields separately
+    const notes: Record<string, string> = {}
+    if (deviceId) notes.device_id = String(deviceId).slice(0, 255)
+    if (orderDetails) {
+      if (orderDetails.platform) notes.platform = String(orderDetails.platform).slice(0, 255)
+      if (orderDetails.category) notes.category = String(orderDetails.category).slice(0, 255)
+      if (orderDetails.service) notes.service = String(orderDetails.service).slice(0, 512)
+      if (orderDetails.link) notes.link = String(orderDetails.link).slice(0, 512)
+      if (orderDetails.quantity) notes.quantity = String(orderDetails.quantity)
+      if (orderDetails.email) notes.email = String(orderDetails.email).slice(0, 255)
+      if (orderDetails.contact) notes.contact = String(orderDetails.contact).slice(0, 255)
+      notes.total_price = String(parsedAmount)
+    }
+
     const response = await fetch("https://api.razorpay.com/v1/orders", {
       method: "POST",
       headers: {
@@ -38,6 +53,7 @@ export async function POST(request: Request) {
         amount: amountInPaise,
         currency: "INR",
         receipt,
+        notes,
       }),
     })
 
@@ -72,3 +88,4 @@ export async function POST(request: Request) {
     )
   }
 }
+

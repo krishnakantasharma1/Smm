@@ -3,6 +3,7 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react"
 import { platformsData } from "@/lib/services-data"
 import { siteConfig } from "@/lib/site-config"
+import { getDeviceId } from "@/lib/device-id"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
@@ -24,6 +25,71 @@ declare global {
   }
 }
 
+const PENDING_ORDERS_KEY = "htg_pending_orders"
+const ORDERS_KEY = "htg_orders"
+
+interface PendingOrder {
+  orderId: string
+  platform: string
+  category: string
+  service: string
+  link: string
+  quantity: string
+  email: string
+  contact: string
+  totalPrice: number
+  deviceId: string
+  createdAt: string
+}
+
+function getPendingOrders(): PendingOrder[] {
+  try {
+    return JSON.parse(localStorage.getItem(PENDING_ORDERS_KEY) || "[]")
+  } catch {
+    return []
+  }
+}
+
+function savePendingOrder(order: PendingOrder) {
+  const existing = getPendingOrders()
+  // Don't add duplicate
+  if (!existing.some((o) => o.orderId === order.orderId)) {
+    existing.push(order)
+  }
+  localStorage.setItem(PENDING_ORDERS_KEY, JSON.stringify(existing))
+}
+
+function removePendingOrder(orderId: string) {
+  const existing = getPendingOrders().filter((o) => o.orderId !== orderId)
+  localStorage.setItem(PENDING_ORDERS_KEY, JSON.stringify(existing))
+}
+
+function saveConfirmedOrder(order: {
+  id: string
+  paymentId: string
+  platform: string
+  category: string
+  service: string
+  link: string
+  quantity: string
+  email: string
+  contact: string
+  totalPrice: number
+  placedAt: string
+}) {
+  try {
+    const existingOrders = JSON.parse(localStorage.getItem(ORDERS_KEY) || "[]")
+    // Don't add duplicate
+    if (existingOrders.some((o: { id: string }) => o.id === order.id)) return false
+    existingOrders.unshift(order)
+    localStorage.setItem(ORDERS_KEY, JSON.stringify(existingOrders))
+    window.dispatchEvent(new Event("htg_orders_updated"))
+    return true
+  } catch {
+    return false
+  }
+}
+
 export function OrderForm() {
   const [platform, setPlatform] = useState("")
   const [category, setCategory] = useState("")
@@ -34,86 +100,91 @@ export function OrderForm() {
   const [contact, setContact] = useState("")
   const [termsAccepted, setTermsAccepted] = useState(false)
   const [loading, setLoading] = useState(false)
-  const pendingOrderRef = useRef<{
-    orderId: string
-    platform: string
-    category: string
-    service: string
-    link: string
-    quantity: string
-    email: string
-    contact: string
-    totalPrice: number
-  } | null>(null)
+  const pendingOrderRef = useRef<PendingOrder | null>(null)
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // On mount and on page focus: try to recover any payment that was interrupted
+  // ── Recovery system: check ALL pending orders on mount, focus, and visibility ──
   useEffect(() => {
-    const recoverPendingPayment = async () => {
-      try {
-        const raw = sessionStorage.getItem("htg_pending_order")
-        if (!raw) return
-        const pending = JSON.parse(raw)
-        if (!pending?.orderId) return
+    const recoverAllPendingOrders = async () => {
+      const pending = getPendingOrders()
+      if (pending.length === 0) return
 
-        console.log("[recovery] Found pending order, checking payment status:", pending.orderId)
+      // Clean up orders older than 24 hours (Razorpay orders expire)
+      const now = Date.now()
+      const validPending = pending.filter((p) => {
+        const age = now - new Date(p.createdAt).getTime()
+        return age < 24 * 60 * 60 * 1000 // 24 hours
+      })
 
-        const res = await fetch("/api/check-order", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ orderId: pending.orderId }),
-        })
-        const data = await res.json()
+      // Remove expired ones
+      if (validPending.length !== pending.length) {
+        localStorage.setItem(PENDING_ORDERS_KEY, JSON.stringify(validPending))
+      }
 
-        if (data.captured) {
-          console.log("[recovery] Payment was captured! Processing order...")
-          sessionStorage.removeItem("htg_pending_order")
-
-          // Save to My Orders
-          try {
-            const existingOrders = JSON.parse(localStorage.getItem("htg_orders") || "[]")
-            // Don't add duplicate
-            const alreadyExists = existingOrders.some((o: {id: string}) => o.id === pending.orderId)
-            if (!alreadyExists) {
-              existingOrders.unshift({
-                id: pending.orderId,
-                paymentId: data.paymentId || "via-webhook",
-                platform: pending.platform,
-                category: pending.category,
-                service: pending.service,
-                link: pending.link,
-                quantity: pending.quantity,
-                email: pending.email,
-                contact: pending.contact,
-                totalPrice: pending.totalPrice,
-                placedAt: new Date().toISOString(),
-              })
-              localStorage.setItem("htg_orders", JSON.stringify(existingOrders))
-              window.dispatchEvent(new Event("htg_orders_updated"))
-            }
-          } catch (e) {
-            console.error("[recovery] Failed to save order:", e)
-          }
-
-          toast.success("✅ Payment confirmed! Your order has been placed. We will get back to you soon.", {
-            duration: 10000,
+      for (const pendingOrder of validPending) {
+        try {
+          const res = await fetch("/api/check-order", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ orderId: pendingOrder.orderId }),
           })
-        } else {
-          console.log("[recovery] Payment not captured yet:", data)
+          const data = await res.json()
+
+          if (data.captured) {
+            // Payment was captured! Save the order and remove from pending
+            removePendingOrder(pendingOrder.orderId)
+
+            const details = data.orderDetails || {}
+            const saved = saveConfirmedOrder({
+              id: pendingOrder.orderId,
+              paymentId: data.paymentId || "via-recovery",
+              platform: pendingOrder.platform || details.platform || "",
+              category: pendingOrder.category || details.category || "",
+              service: pendingOrder.service || details.service || "",
+              link: pendingOrder.link || details.link || "",
+              quantity: pendingOrder.quantity || details.quantity || "",
+              email: pendingOrder.email || details.email || "",
+              contact: pendingOrder.contact || details.contact || "",
+              totalPrice: pendingOrder.totalPrice || details.totalPrice || data.amount || 0,
+              placedAt: pendingOrder.createdAt || new Date().toISOString(),
+            })
+
+            if (saved) {
+              toast.success("Payment confirmed! Your order has been placed. We will get back to you soon.", {
+                duration: 10000,
+              })
+            }
+          }
+        } catch {
+          // Silently fail for individual order checks
         }
-      } catch (e) {
-        console.error("[recovery] Error checking pending order:", e)
       }
     }
 
-    recoverPendingPayment()
+    // Run immediately on mount
+    recoverAllPendingOrders()
 
-    // Also check on tab focus (user comes back from UPI app)
-    const handleFocus = () => recoverPendingPayment()
+    // Run on tab focus (user returns from UPI app)
+    const handleFocus = () => recoverAllPendingOrders()
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") recoverAllPendingOrders()
+    }
+
     window.addEventListener("focus", handleFocus)
-    document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible") recoverPendingPayment()
-    })
-    return () => window.removeEventListener("focus", handleFocus)
+    document.addEventListener("visibilitychange", handleVisibility)
+
+    // Also run periodically every 10 seconds while there are pending orders
+    const periodicCheck = setInterval(() => {
+      if (getPendingOrders().length > 0) {
+        recoverAllPendingOrders()
+      }
+    }, 10000)
+
+    return () => {
+      window.removeEventListener("focus", handleFocus)
+      document.removeEventListener("visibilitychange", handleVisibility)
+      clearInterval(periodicCheck)
+    }
   }, [])
 
   const selectedPlatform = useMemo(
@@ -155,46 +226,79 @@ export function OrderForm() {
     setQuantity("")
   }, [])
 
+  // ── Polling: aggressive check after Razorpay modal interaction ──
+  const startPolling = useCallback((orderId: string, pending: PendingOrder) => {
+    if (pollingRef.current) clearInterval(pollingRef.current)
+
+    let attempts = 0
+    const maxAttempts = 30 // Poll for up to 5 minutes (every 10s)
+
+    pollingRef.current = setInterval(async () => {
+      attempts++
+      if (attempts > maxAttempts) {
+        if (pollingRef.current) clearInterval(pollingRef.current)
+        pollingRef.current = null
+        return
+      }
+
+      try {
+        const res = await fetch("/api/check-order", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ orderId }),
+        })
+        const data = await res.json()
+
+        if (data.captured) {
+          if (pollingRef.current) clearInterval(pollingRef.current)
+          pollingRef.current = null
+          removePendingOrder(orderId)
+          pendingOrderRef.current = null
+
+          const details = data.orderDetails || {}
+          const saved = saveConfirmedOrder({
+            id: orderId,
+            paymentId: data.paymentId || "via-polling",
+            platform: pending.platform || details.platform || "",
+            category: pending.category || details.category || "",
+            service: pending.service || details.service || "",
+            link: pending.link || details.link || "",
+            quantity: pending.quantity || details.quantity || "",
+            email: pending.email || details.email || "",
+            contact: pending.contact || details.contact || "",
+            totalPrice: pending.totalPrice || details.totalPrice || data.amount || 0,
+            placedAt: pending.createdAt || new Date().toISOString(),
+          })
+
+          if (saved) {
+            toast.success("Payment confirmed! Your order has been placed. We will get back to you soon.", {
+              duration: 10000,
+            })
+            // Reset form
+            setPlatform(""); setCategory(""); setService(""); setLink("")
+            setQuantity(""); setEmail(""); setContact(""); setTermsAccepted(false)
+          }
+        }
+      } catch {
+        // Continue polling on error
+      }
+    }, 10000) // Every 10 seconds
+  }, [])
+
   const handlePlaceOrder = async () => {
     // Validate individual fields with specific messages
-    if (!platform) {
-      toast.error("Please select a platform")
-      return
-    }
-    if (!category) {
-      toast.error("Please select a category")
-      return
-    }
-    if (!service) {
-      toast.error("Please select a service")
-      return
-    }
-    if (!link) {
-      toast.error("Please enter your account or post link")
-      return
-    }
+    if (!platform) { toast.error("Please select a platform"); return }
+    if (!category) { toast.error("Please select a category"); return }
+    if (!service) { toast.error("Please select a service"); return }
+    if (!link) { toast.error("Please enter your account or post link"); return }
     if (!quantity || isNaN(Number(quantity)) || Number(quantity) <= 0) {
-      toast.error("Please enter a valid quantity")
-      return
+      toast.error("Please enter a valid quantity"); return
     }
-    if (!email) {
-      toast.error("Please enter your email address")
-      return
-    }
-    // Basic email validation
+    if (!email) { toast.error("Please enter your email address"); return }
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-    if (!emailRegex.test(email)) {
-      toast.error("Please enter a valid email address")
-      return
-    }
-    if (!contact) {
-      toast.error("Please enter your Telegram username or phone number")
-      return
-    }
-    if (!termsAccepted) {
-      toast.error("Please accept the terms and conditions")
-      return
-    }
+    if (!emailRegex.test(email)) { toast.error("Please enter a valid email address"); return }
+    if (!contact) { toast.error("Please enter your Telegram username or phone number"); return }
+    if (!termsAccepted) { toast.error("Please accept the terms and conditions"); return }
     if (totalPrice < siteConfig.minOrderValue) {
       toast.error(`Minimum order value is Rs.${siteConfig.minOrderValue}. Please increase your quantity.`)
       return
@@ -207,7 +311,7 @@ export function OrderForm() {
     setLoading(true)
 
     try {
-      // Wait for Razorpay SDK to load (retry up to 5 seconds)
+      // Wait for Razorpay SDK to load
       if (typeof window.Razorpay === "undefined") {
         let waited = 0
         await new Promise<void>((resolve, reject) => {
@@ -224,10 +328,14 @@ export function OrderForm() {
         })
       }
 
+      const deviceId = getDeviceId()
+      const orderDetails = { platform, category, service, link, quantity, email, contact, totalPrice }
+
+      // Create order with full details stored in Razorpay notes
       const res = await fetch("/api/create-order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ amount: totalPrice }),
+        body: JSON.stringify({ amount: totalPrice, orderDetails, deviceId }),
       })
 
       const data = await res.json()
@@ -238,18 +346,16 @@ export function OrderForm() {
         return
       }
 
-      // Save pending order to sessionStorage BEFORE opening Razorpay
-      // This allows recovery if user closes popup, switches to UPI app, or page crashes
-      const pendingOrder = {
+      // Save pending order to localStorage BEFORE opening Razorpay
+      // This persists even if the browser closes entirely
+      const pendingOrder: PendingOrder = {
         orderId: data.orderId,
         platform, category, service, link, quantity, email, contact, totalPrice,
+        deviceId,
+        createdAt: new Date().toISOString(),
       }
       pendingOrderRef.current = pendingOrder
-      try {
-        sessionStorage.setItem("htg_pending_order", JSON.stringify(pendingOrder))
-      } catch (e) {
-        console.error("Failed to save pending order:", e)
-      }
+      savePendingOrder(pendingOrder)
 
       const options = {
         key: data.keyId,
@@ -267,79 +373,56 @@ export function OrderForm() {
                 razorpay_payment_id: response.razorpay_payment_id,
                 razorpay_order_id: response.razorpay_order_id,
                 razorpay_signature: response.razorpay_signature,
-                orderDetails: {
-                  platform,
-                  category,
-                  service,
-                  link,
-                  quantity,
-                  email,
-                  contact,
-                  totalPrice,
-                },
+                orderDetails: { platform, category, service, link, quantity, email, contact, totalPrice },
               }),
             })
 
             const verifyData = await verifyRes.json()
 
             if (verifyData.success) {
-              toast.success("✅ Payment successful! We will get back to you soon.", {
+              toast.success("Payment successful! We will get back to you soon.", {
                 duration: 8000,
               })
-              // Save order to localStorage for My Orders page
-              try {
-                const existingOrders = JSON.parse(localStorage.getItem("htg_orders") || "[]")
-                const newOrder = {
-                  id: response.razorpay_order_id,
-                  paymentId: response.razorpay_payment_id,
-                  platform,
-                  category,
-                  service,
-                  link,
-                  quantity,
-                  email,
-                  contact,
-                  totalPrice,
-                  status: "Processing",
-                  placedAt: new Date().toISOString(),
-                }
-                existingOrders.unshift(newOrder)
-                localStorage.setItem("htg_orders", JSON.stringify(existingOrders))
-                // Clear pending order — normal flow succeeded
-                sessionStorage.removeItem("htg_pending_order")
-                pendingOrderRef.current = null
-                // Notify header to show My Orders instantly without refresh
-                window.dispatchEvent(new Event("htg_orders_updated"))
-              } catch (e) {
-                console.error("Failed to save order locally:", e)
-              }
-              // Reset entire form
-              setPlatform("")
-              setCategory("")
-              setService("")
-              setLink("")
-              setQuantity("")
-              setEmail("")
-              setContact("")
-              setTermsAccepted(false)
+              // Remove from pending and save as confirmed
+              removePendingOrder(data.orderId)
+              pendingOrderRef.current = null
+              if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null }
+
+              saveConfirmedOrder({
+                id: response.razorpay_order_id,
+                paymentId: response.razorpay_payment_id,
+                platform, category, service, link, quantity, email, contact, totalPrice,
+                status: "Processing",
+                placedAt: new Date().toISOString(),
+              } as never)
+
+              // Reset form
+              setPlatform(""); setCategory(""); setService(""); setLink("")
+              setQuantity(""); setEmail(""); setContact(""); setTermsAccepted(false)
               setLoading(false)
             } else {
+              // Verification failed but payment might still be captured
+              // Start polling as safety net
+              startPolling(data.orderId, pendingOrder)
               toast.error(verifyData.error || "Payment verification failed. Please contact support at htgstudio0@gmail.com")
               setLoading(false)
             }
-          } catch (err) {
-            const message = err instanceof Error ? err.message : "Unknown error"
-            toast.error(`Payment verification error: ${message}. Please contact support at htgstudio0@gmail.com`)
+          } catch {
+            // Network error during verification - start polling
+            startPolling(data.orderId, pendingOrder)
+            toast.error("Payment verification error. If you completed payment, it will be confirmed automatically.")
             setLoading(false)
           }
         },
         modal: {
           ondismiss: async function () {
-            // Don't immediately assume cancelled — user may have paid via UPI app
-            // Check Razorpay directly to see if payment was captured
+            // User closed the Razorpay modal - payment may still be processing
+            // Check immediately, then start aggressive polling
             const pending = pendingOrderRef.current
             if (pending?.orderId) {
               toast.info("Checking payment status...", { duration: 3000 })
+
+              // Immediate check
               try {
                 const checkRes = await fetch("/api/check-order", {
                   method: "POST",
@@ -349,43 +432,44 @@ export function OrderForm() {
                 const checkData = await checkRes.json()
 
                 if (checkData.captured) {
-                  // Payment went through! Process it
-                  sessionStorage.removeItem("htg_pending_order")
+                  removePendingOrder(pending.orderId)
                   pendingOrderRef.current = null
 
-                  const existingOrders = JSON.parse(localStorage.getItem("htg_orders") || "[]")
-                  const alreadyExists = existingOrders.some((o: {id: string}) => o.id === pending.orderId)
-                  if (!alreadyExists) {
-                    existingOrders.unshift({
-                      id: pending.orderId,
-                      paymentId: checkData.paymentId || "captured",
-                      platform: pending.platform,
-                      category: pending.category,
-                      service: pending.service,
-                      link: pending.link,
-                      quantity: pending.quantity,
-                      email: pending.email,
-                      contact: pending.contact,
-                      totalPrice: pending.totalPrice,
-                      placedAt: new Date().toISOString(),
-                    })
-                    localStorage.setItem("htg_orders", JSON.stringify(existingOrders))
-                    window.dispatchEvent(new Event("htg_orders_updated"))
-                  }
+                  const details = checkData.orderDetails || {}
+                  saveConfirmedOrder({
+                    id: pending.orderId,
+                    paymentId: checkData.paymentId || "captured",
+                    platform: pending.platform || details.platform,
+                    category: pending.category || details.category,
+                    service: pending.service || details.service,
+                    link: pending.link || details.link,
+                    quantity: pending.quantity || details.quantity,
+                    email: pending.email || details.email,
+                    contact: pending.contact || details.contact,
+                    totalPrice: pending.totalPrice || details.totalPrice,
+                    placedAt: pending.createdAt || new Date().toISOString(),
+                  })
 
-                  toast.success("✅ Payment confirmed! Your order has been placed. We will get back to you soon.", {
+                  toast.success("Payment confirmed! Your order has been placed. We will get back to you soon.", {
                     duration: 10000,
                   })
                   setPlatform(""); setCategory(""); setService(""); setLink("")
                   setQuantity(""); setEmail(""); setContact(""); setTermsAccepted(false)
+                } else if (checkData.authorized) {
+                  // Payment is authorized but not yet captured - it will be captured soon
+                  toast.info("Payment is being processed. Your order will appear shortly.", { duration: 8000 })
+                  startPolling(pending.orderId, pending)
                 } else {
-                  // Genuinely cancelled or payment pending
-                  toast.info("Payment was cancelled. If you completed payment, it will be confirmed shortly.", {
-                    duration: 6000,
+                  // Not captured yet - could still be processing (UPI takes time)
+                  toast.info("If you completed payment, your order will be confirmed automatically. Check 'My Orders' in a few minutes.", {
+                    duration: 8000,
                   })
+                  // Start polling anyway - UPI payments can take 30+ seconds
+                  startPolling(pending.orderId, pending)
                 }
-              } catch (e) {
-                toast.info("Payment was cancelled. If you completed payment, please wait — it will be confirmed automatically.")
+              } catch {
+                toast.info("If you completed payment, it will be confirmed automatically.")
+                startPolling(pending.orderId, pending)
               }
             } else {
               toast.info("Payment was cancelled. You can try again anytime.")
@@ -393,18 +477,20 @@ export function OrderForm() {
             setLoading(false)
           },
         },
-        prefill: {
-          email: email,
-          contact: contact,
-        },
-        theme: {
-          color: "#0066FF",
+        prefill: { email, contact },
+        theme: { color: "#0066FF" },
+        notes: {
+          device_id: deviceId,
+          platform,
+          category,
+          service: service.substring(0, 255),
         },
       }
 
       const rzp = new window.Razorpay(options)
       rzp.on("payment.failed", function (response: { error: { code: string; description: string; reason: string } }) {
         toast.error(`Payment failed: ${response.error.description || response.error.reason || "Unknown error"}`)
+        // Don't remove from pending - user might retry
         setLoading(false)
       })
       rzp.open()
@@ -614,3 +700,4 @@ export function OrderForm() {
     </div>
   )
 }
+

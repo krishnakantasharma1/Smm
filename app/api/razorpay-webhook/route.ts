@@ -47,9 +47,31 @@ export async function POST(request: Request) {
           method: payment.method,
         })
 
-        // Send email notification — this is the server-side safety net
-        // when the user closes the popup before verify-payment fires
-        await sendWebhookEmail(payment)
+        // Fetch order details from Razorpay notes (we stored them at creation time)
+        let orderNotes: Record<string, string> = {}
+        try {
+          const keyId = process.env.RAZORPAY_KEY_ID
+          const keySecret = process.env.RAZORPAY_KEY_SECRET
+          if (keyId && keySecret && payment.order_id) {
+            const orderRes = await fetch(
+              `https://api.razorpay.com/v1/orders/${payment.order_id}`,
+              {
+                headers: {
+                  Authorization: `Basic ${Buffer.from(`${keyId}:${keySecret}`).toString("base64")}`,
+                },
+              }
+            )
+            if (orderRes.ok) {
+              const orderData = await orderRes.json()
+              orderNotes = orderData.notes || {}
+            }
+          }
+        } catch (e) {
+          console.error("[webhook] Failed to fetch order notes:", e)
+        }
+
+        // Send email notification with full order details from notes
+        await sendWebhookEmail(payment, orderNotes)
       }
     }
 
@@ -71,41 +93,67 @@ export async function POST(request: Request) {
   }
 }
 
-async function sendWebhookEmail(payment: {
-  id: string
-  order_id: string
-  amount: number
-  email?: string
-  contact?: string
-  method?: string
-  description?: string
-}) {
+async function sendWebhookEmail(
+  payment: {
+    id: string
+    order_id: string
+    amount: number
+    email?: string
+    contact?: string
+    method?: string
+    description?: string
+  },
+  orderNotes: Record<string, string>
+) {
   const dateStr = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })
   const amountRs = payment.amount / 100
 
-  const subject = `💳 Payment Captured (Webhook) | Rs.${amountRs} | ${payment.id}`
+  // Determine if we have full order details from notes
+  const hasOrderDetails = !!(orderNotes.platform || orderNotes.service)
+
+  const subject = hasOrderDetails
+    ? `New Order (Webhook) | ${orderNotes.platform} | ${orderNotes.category} | Rs.${amountRs}`
+    : `Payment Captured (Webhook) | Rs.${amountRs} | ${payment.id}`
+
+  const orderDetailsHtml = hasOrderDetails
+    ? `
+      <tr style="background:#f8f9fa;"><td style="padding:10px 12px;font-weight:bold;border:1px solid #dee2e6;width:40%;">Platform</td><td style="padding:10px 12px;border:1px solid #dee2e6;">${orderNotes.platform || "N/A"}</td></tr>
+      <tr><td style="padding:10px 12px;font-weight:bold;border:1px solid #dee2e6;">Category</td><td style="padding:10px 12px;border:1px solid #dee2e6;">${orderNotes.category || "N/A"}</td></tr>
+      <tr style="background:#f8f9fa;"><td style="padding:10px 12px;font-weight:bold;border:1px solid #dee2e6;">Service</td><td style="padding:10px 12px;border:1px solid #dee2e6;">${orderNotes.service || "N/A"}</td></tr>
+      <tr><td style="padding:10px 12px;font-weight:bold;border:1px solid #dee2e6;">Link</td><td style="padding:10px 12px;border:1px solid #dee2e6;"><a href="${orderNotes.link || "#"}" style="color:#0066FF;">${orderNotes.link || "N/A"}</a></td></tr>
+      <tr style="background:#f8f9fa;"><td style="padding:10px 12px;font-weight:bold;border:1px solid #dee2e6;">Quantity</td><td style="padding:10px 12px;border:1px solid #dee2e6;">${orderNotes.quantity || "N/A"}</td></tr>
+    `
+    : ""
 
   const htmlContent = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
       <div style="background: #16a34a; padding: 16px 20px; border-radius: 6px 6px 0 0; margin: -20px -20px 20px;">
-        <h2 style="color: #fff; margin: 0;">💳 Payment Captured via Webhook</h2>
-        <p style="color: #dcfce7; margin: 4px 0 0; font-size: 13px;">User may have closed the popup — order details below</p>
+        <h2 style="color: #fff; margin: 0;">Payment Captured via Webhook</h2>
+        <p style="color: #dcfce7; margin: 4px 0 0; font-size: 13px;">${hasOrderDetails ? "Full order details available" : "User may have closed popup - limited details"}</p>
       </div>
       <table style="width:100%;border-collapse:collapse;">
         <tr style="background:#f8f9fa;"><td style="padding:10px 12px;font-weight:bold;border:1px solid #dee2e6;width:40%;">Payment ID</td><td style="padding:10px 12px;border:1px solid #dee2e6;font-family:monospace;">${payment.id}</td></tr>
         <tr><td style="padding:10px 12px;font-weight:bold;border:1px solid #dee2e6;">Order ID</td><td style="padding:10px 12px;border:1px solid #dee2e6;font-family:monospace;">${payment.order_id}</td></tr>
-        <tr style="background:#f8f9fa;"><td style="padding:10px 12px;font-weight:bold;border:1px solid #dee2e6;">Amount</td><td style="padding:10px 12px;border:1px solid #dee2e6;font-weight:bold;color:#16a34a;">Rs.${amountRs}</td></tr>
+        <tr style="background:#e8f0fe;"><td style="padding:10px 12px;font-weight:bold;border:1px solid #dee2e6;color:#0066FF;">Amount</td><td style="padding:10px 12px;border:1px solid #dee2e6;font-weight:bold;color:#0066FF;font-size:16px;">Rs.${amountRs}</td></tr>
         <tr><td style="padding:10px 12px;font-weight:bold;border:1px solid #dee2e6;">Payment Method</td><td style="padding:10px 12px;border:1px solid #dee2e6;">${payment.method || "N/A"}</td></tr>
-        <tr style="background:#f8f9fa;"><td style="padding:10px 12px;font-weight:bold;border:1px solid #dee2e6;">Customer Email</td><td style="padding:10px 12px;border:1px solid #dee2e6;">${payment.email || "N/A"}</td></tr>
-        <tr><td style="padding:10px 12px;font-weight:bold;border:1px solid #dee2e6;">Customer Contact</td><td style="padding:10px 12px;border:1px solid #dee2e6;">${payment.contact || "N/A"}</td></tr>
-        <tr style="background:#fefce8;"><td style="padding:10px 12px;font-weight:bold;border:1px solid #dee2e6;">Description</td><td style="padding:10px 12px;border:1px solid #dee2e6;">${payment.description || "N/A"}</td></tr>
+        ${orderDetailsHtml}
+        <tr style="background:#f8f9fa;"><td style="padding:10px 12px;font-weight:bold;border:1px solid #dee2e6;">Customer Email</td><td style="padding:10px 12px;border:1px solid #dee2e6;">${orderNotes.email || payment.email || "N/A"}</td></tr>
+        <tr><td style="padding:10px 12px;font-weight:bold;border:1px solid #dee2e6;">Customer Contact</td><td style="padding:10px 12px;border:1px solid #dee2e6;">${orderNotes.contact || payment.contact || "N/A"}</td></tr>
+        ${orderNotes.device_id ? `<tr style="background:#f8f9fa;"><td style="padding:10px 12px;font-weight:bold;border:1px solid #dee2e6;">Device ID</td><td style="padding:10px 12px;border:1px solid #dee2e6;font-family:monospace;font-size:11px;">${orderNotes.device_id}</td></tr>` : ""}
       </table>
-      <div style="background:#fef9c3;border:1px solid #fde047;border-radius:6px;padding:12px 16px;margin-top:16px;">
-        <p style="margin:0;font-size:13px;color:#854d0e;"><strong>⚠️ Note:</strong> This payment was captured by webhook (user likely closed popup or used external UPI app). The service order details are in the Description field above. Contact the customer at ${payment.email || payment.contact || "N/A"} to confirm their order details.</p>
-      </div>
       <p style="color:#888;margin-top:16px;font-size:12px;">Received on: ${dateStr}</p>
     </div>
   `
+
+  const orderDetailsText = hasOrderDetails
+    ? `
+Platform   : ${orderNotes.platform || "N/A"}
+Category   : ${orderNotes.category || "N/A"}
+Service    : ${orderNotes.service || "N/A"}
+Link       : ${orderNotes.link || "N/A"}
+Quantity   : ${orderNotes.quantity || "N/A"}
+`
+    : ""
 
   const textContent = `
 PAYMENT CAPTURED VIA WEBHOOK — HTG Studio
@@ -114,12 +162,11 @@ Payment ID  : ${payment.id}
 Order ID    : ${payment.order_id}
 Amount      : Rs.${amountRs}
 Method      : ${payment.method || "N/A"}
-Email       : ${payment.email || "N/A"}
-Contact     : ${payment.contact || "N/A"}
-Description : ${payment.description || "N/A"}
+${orderDetailsText}
+Email       : ${orderNotes.email || payment.email || "N/A"}
+Contact     : ${orderNotes.contact || payment.contact || "N/A"}
+Device ID   : ${orderNotes.device_id || "N/A"}
 Date        : ${dateStr}
-
-NOTE: User may have closed popup. Contact customer to confirm order.
   `.trim()
 
   console.log("[webhook] Sending email for captured payment:", payment.id)
@@ -143,7 +190,7 @@ NOTE: User may have closed popup. Contact customer to confirm order.
     })
     const data = await res.json()
     if (res.ok) {
-      console.log("[webhook] ✅ Email sent via Resend:", data.id)
+      console.log("[webhook] Email sent via Resend:", data.id)
       return
     }
     console.error("[webhook] Resend failed:", data)
@@ -164,6 +211,7 @@ NOTE: User may have closed popup. Contact customer to confirm order.
       text: textContent,
       html: htmlContent,
     })
-    console.log("[webhook] ✅ Email sent via Gmail SMTP")
+    console.log("[webhook] Email sent via Gmail SMTP")
   }
 }
+
