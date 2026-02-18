@@ -77,10 +77,12 @@ export async function POST(request: Request) {
 
     // Send confirmation email to the customer via Brevo HTTP API
     // Wrapped in its own try/catch so it never affects the admin email or success response
+    console.log("[v0] About to call sendCustomerConfirmationEmail. email:", orderDetails?.email, "BREVO_API_KEY set:", !!process.env.BREVO_API_KEY)
     try {
       await sendCustomerConfirmationEmail(orderDetails as OrderDetails, razorpay_payment_id, razorpay_order_id)
+      console.log("[v0] sendCustomerConfirmationEmail completed successfully")
     } catch (customerEmailErr) {
-      console.error("[verify-payment] Customer confirmation email failed:", customerEmailErr)
+      console.error("[v0] Customer confirmation email FAILED with error:", customerEmailErr)
     }
 
     return NextResponse.json({ success: true })
@@ -248,11 +250,13 @@ async function sendCustomerConfirmationEmail(
   orderId: string
 ): Promise<void> {
   const brevoApiKey = process.env.BREVO_API_KEY
+  console.log("[v0] BREVO_API_KEY present:", !!brevoApiKey, "length:", brevoApiKey?.length)
   if (!brevoApiKey) {
     console.warn("[sendCustomerEmail] BREVO_API_KEY not set — skipping customer email")
     return
   }
 
+  console.log("[v0] Customer email value:", orderDetails.email)
   if (!orderDetails.email) {
     console.warn("[sendCustomerEmail] No customer email address — skipping")
     return
@@ -368,7 +372,7 @@ If you have any questions, contact us at htgstudio0@gmail.com with your Payment 
 SSM Reselling — Social Media Growth Services
   `.trim()
 
-  console.log("[sendCustomerEmail] Sending confirmation to:", orderDetails.email)
+  console.log("[v0] About to call Brevo API. Sending to:", orderDetails.email, "from: krishnakantasharma297@gmail.com")
 
   const res = await fetch("https://api.brevo.com/v3/smtp/email", {
     method: "POST",
@@ -386,7 +390,9 @@ SSM Reselling — Social Media Growth Services
     }),
   })
 
+  console.log("[v0] Brevo API response status:", res.status)
   const data = await res.json()
+  console.log("[v0] Brevo API response body:", JSON.stringify(data))
 
   if (res.ok) {
     console.log("[sendCustomerEmail] Sent via Brevo to", orderDetails.email, "messageId:", data.messageId)
